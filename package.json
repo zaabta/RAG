@@ -2,22 +2,54 @@
   "name": "typegraph",
   "private": true,
   "packageManager": "pnpm@10.18.0",
-  "workspaces": ["packages/*", "packages/adapters/*"],
+  "workspaces": [
+    "packages/*",
+    "packages/adapters/*"
+  ],
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
     "test": "turbo run test",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
+    "sitepilot:smoke": "tsx scripts/sitepilot-smoke.mts",
+    "sitepilot:search": "tsx scripts/sitepilot-search.mts",
+    "sitepilot:excel-inspect": "tsx scripts/sitepilot-excel-inspect.mts",
+    "sitepilot:excel-audit": "tsx scripts/sitepilot-excel-audit.mts",
+    "sitepilot:excel-preview": "tsx scripts/sitepilot-excel-preview.mts",
+    "sitepilot:excel-import": "tsx scripts/sitepilot-excel-import.mts",
+    "sitepilot:excel-query": "tsx scripts/sitepilot-excel-query.mts",
+    "sitepilot:excel-test": "vitest run scripts/sitepilot-excel.test.mts",
+    "sitepilot:upload-server": "tsx src/sitepilot/api/sitepilot-upload-server.mts",
+    "sitepilot:upload-test": "vitest run scripts/sitepilot-upload.test.mts",
+    "sitepilot:upload-integration": "tsx scripts/sitepilot-upload-integration.mts",
+    "sitepilot:docker-e2e": "tsx scripts/sitepilot-docker-e2e.mts",
+    "sitepilot:migration-integration": "tsx scripts/sitepilot-migration.integration.mts",
+    "sitepilot:sql-perf-check": "tsx scripts/sitepilot-sql-perf-check.mts",
     "check:ci-coverage": "node scripts/check-ci-coverage.mjs",
-    "clean": "turbo run clean"
+    "clean": "turbo run clean",
+    "sitepilot:dev-auth": "tsx scripts/sitepilot-dev-auth.mts",
+    "sitepilot:dev-auth-test": "vitest run scripts/sitepilot-dev-auth.test.mts",
+    "sitepilot:workspace-test": "vitest run scripts/sitepilot-llm-provider.test.mts",
+    "sitepilot:workspace-integration": "tsx scripts/sitepilot-workspace.integration.mts"
   },
   "devDependencies": {
-    "turbo": "^2.0.0",
-    "typescript": "^5.4.0",
     "@types/node": "^20.0.0",
+    "@types/pg": "^8.20.0",
     "eslint": "^8.0.0",
     "prettier": "^3.0.0",
+    "turbo": "^2.0.0",
+    "typescript": "^5.4.0",
     "vitest": "^1.0.0"
+  },
+  "dependencies": {
+    "@google/genai": "^2.32.0",
+    "@huggingface/transformers": "^4.3.2",
+    "@typegraph-ai/adapter-pgvector-pg": "workspace:*",
+    "@typegraph-ai/sdk": "workspace:*",
+    "dotenv": "^18.0.9",
+    "exceljs": "^4.4.0",
+    "pg": "^8.20.0",
+    "tsx": "^4.23.15"
   }
 }

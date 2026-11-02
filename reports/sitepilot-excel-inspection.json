@@ -1,0 +1,441 @@
+{
+  "generatedAt": "2026-11-01T05:07:27.184Z",
+  "fileName": "İhtar Tablosu_Kontrol.xlsx",
+  "fileId": "e76416fc523175c90a5b6a25ecb06e1e97764227da5a3365c243d4b1762cffa6",
+  "worksheetCount": 6,
+  "sheets": [
+    {
+      "name": "İHTAR TABLOSU_DTO",
+      "rowCount": 2738,
+      "populatedRowCount": 2738,
+      "columnCount": 30,
+      "populatedColumnCount": 30,
+      "headerRow": 1,
+      "headerDetectionScore": 174,
+      "headers": [
+        {
+          "column": 1,
+          "original": "FORM NO"
+        },
+        {
+          "column": 2,
+          "original": "OLAY TARİHİ"
+        },
+        {
+          "column": 3,
+          "original": "TESPİT YAPAN BİRİM"
+        },
+        {
+          "column": 4,
+          "original": "FİRMA / ALT YÜKLENİCİ"
+        },
+        {
+          "column": 5,
+          "original": "PERSONEL NO"
+        },
+        {
+          "column": 6,
+          "original": "PERSONEL ADI SOYADI"
+        },
+        {
+          "column": 7,
+          "original": "T.C KİMLİK NUMARASI"
+        },
+        {
+          "column": 8,
+          "original": "UYRUK"
+        },
+        {
+          "column": 9,
+          "original": "İŞE GİRİŞ TARİHİ"
+        },
+        {
+          "column": 10,
+          "original": "İŞTEN ÇIKIŞ TARİHİ"
+        },
+        {
+          "column": 11,
+          "original": "POZİSYON"
+        },
+        {
+          "column": 12,
+          "original": "İHLAL YAPILAN BÖLGE"
+        },
+        {
+          "column": 13,
+          "original": "İHLAL YAPILAN LOKASYON"
+        },
+        {
+          "column": 14,
+          "original": "UYARIYI YAZAN / TALEP EDEN PERSONEL"
+        },
+        {
+          "column": 15,
+          "original": "SORUMLU PROJE MÜDÜRÜ"
+        },
+        {
+          "column": 16,
+          "original": "Tc No"
+        },
+        {
+          "column": 17,
+          "original": "Adı Soyadı"
+        },
+        {
+          "column": 18,
+          "original": "Pozisyon2"
+        },
+        {
+          "column": 19,
+          "original": "ANA İHLAL TÜRÜ"
+        },
+        {
+          "column": 20,
+          "original": "ALT İHLAL TÜRÜ"
+        },
+        {
+          "column": 21,
+          "original": "AÇIKLAMA"
+        },
+        {
+          "column": 22,
+          "original": "ÖNERİLEN AKSİYON"
+        },
+        {
+          "column": 23,
+          "original": "ÖNERİLEN UZAKLAŞTIRMA GÜN SAYISI"
+        },
+        {
+          "column": 24,
+          "original": "UYGULANAN CEZAİ İŞLEM"
+        },
+        {
+          "column": 25,
+          "original": "UYGULANAN UZAKLAŞTIRMA GÜN SAYISI"
+        },
+        {
+          "column": 26,
+          "original": "SAVUNMA VERME TARİHİ"
+        },
+        {
+          "column": 27,
+          "original": "SAVUNMA AÇIKLAMA"
+        },
+        {
+          "column": 28,
+          "original": "TOPLAM ALINAN UYARI SAYISI"
+        },
+        {
+          "column": 29,
+          "original": "AYNI İHLALİN TEKRAR DURUMU"
+        },
+        {
+          "column": 30,
+          "original": null,
+          "empty": true
+        }
+      ],
+      "emptyHeaderColumns": [
+        30
+      ],
+      "duplicateHeaders": [],
+      "likelySensitiveHeaders": [
+        "PERSONEL NO",
+        "PERSONEL ADI SOYADI",
+        "T.C KİMLİK NUMARASI",
+        "UYRUK",
+        "UYARIYI YAZAN / TALEP EDEN PERSONEL",
+        "SORUMLU PROJE MÜDÜRÜ",
+        "Tc No",
+        "Adı Soyadı"
+      ],
+      "mergedRanges": [],
+      "hiddenRows": [],
+      "hiddenColumns": [],
+      "formulaCount": 210,
+      "formulaCachedValueCount": 210,
+      "dateCellCount": 8464,
+      "numericCellCount": 10454,
+      "numericFormats": [
+        {
+          "format": "0",
+          "count": 2730
+        }
+      ],
+      "identifierDuplicates": [
+        {
+          "header": "FORM NO",
+          "duplicateCount": 0,
+          "distinctValues": 2737
+        }
+      ],
+      "headerless": false,
+      "referenceLikeSheet": false,
+      "cellValuesOmitted": true
+    },
+    {
+      "name": "İHLAL TÜRLERİ",
+      "rowCount": 54,
+      "populatedRowCount": 54,
+      "columnCount": 4,
+      "populatedColumnCount": 3,
+      "headerRow": 1,
+      "headerDetectionScore": 18,
+      "headers": [
+        {
+          "column": 1,
+          "original": null,
+          "empty": true
+        },
+        {
+          "column": 2,
+          "original": "Ana İhlal Türü"
+        },
+        {
+          "column": 3,
+          "original": "Alt İhlal Türü"
+        },
+        {
+          "column": 4,
+          "original": "Açıklama"
+        }
+      ],
+      "emptyHeaderColumns": [
+        1
+      ],
+      "duplicateHeaders": [],
+      "likelySensitiveHeaders": [],
+      "mergedRanges": [],
+      "hiddenRows": [],
+      "hiddenColumns": [],
+      "formulaCount": 0,
+      "formulaCachedValueCount": 0,
+      "dateCellCount": 0,
+      "numericCellCount": 0,
+      "numericFormats": [],
+      "identifierDuplicates": [],
+      "headerless": false,
+      "referenceLikeSheet": false,
+      "cellValuesOmitted": true
+    },
+    {
+      "name": "ÖNERİLENUYGULANAN CEZAİ İŞLEM",
+      "rowCount": 6,
+      "populatedRowCount": 6,
+      "columnCount": 4,
+      "populatedColumnCount": 4,
+      "headerRow": 1,
+      "headerDetectionScore": 24,
+      "headers": [
+        {
+          "column": 1,
+          "original": "ÖNERİLEN AKSİYON"
+        },
+        {
+          "column": 2,
+          "original": "ÖNERİLEN UZAKLAŞTIRMA GÜN SAYISI"
+        },
+        {
+          "column": 3,
+          "original": "UYGULANAN CEZAİ İŞLEM"
+        },
+        {
+          "column": 4,
+          "original": "UYGULANAN UZAKLAŞTIRMA GÜN SAYISI"
+        }
+      ],
+      "emptyHeaderColumns": [],
+      "duplicateHeaders": [],
+      "likelySensitiveHeaders": [],
+      "mergedRanges": [],
+      "hiddenRows": [],
+      "hiddenColumns": [],
+      "formulaCount": 0,
+      "formulaCachedValueCount": 0,
+      "dateCellCount": 0,
+      "numericCellCount": 0,
+      "numericFormats": [],
+      "identifierDuplicates": [],
+      "headerless": false,
+      "referenceLikeSheet": true,
+      "cellValuesOmitted": true
+    },
+    {
+      "name": "FİRMA _ ALT YÜKLENİCİ",
+      "rowCount": 41,
+      "populatedRowCount": 41,
+      "columnCount": 2,
+      "populatedColumnCount": 2,
+      "headerRow": 1,
+      "headerDetectionScore": 12,
+      "headers": [
+        {
+          "column": 1,
+          "original": "Company"
+        },
+        {
+          "column": 2,
+          "original": "Active"
+        }
+      ],
+      "emptyHeaderColumns": [],
+      "duplicateHeaders": [],
+      "likelySensitiveHeaders": [],
+      "mergedRanges": [],
+      "hiddenRows": [],
+      "hiddenColumns": [],
+      "formulaCount": 0,
+      "formulaCachedValueCount": 0,
+      "dateCellCount": 0,
+      "numericCellCount": 0,
+      "numericFormats": [],
+      "identifierDuplicates": [],
+      "headerless": false,
+      "referenceLikeSheet": false,
+      "cellValuesOmitted": true
+    },
+    {
+      "name": "BÖLGE-PM",
+      "rowCount": 52,
+      "populatedRowCount": 52,
+      "columnCount": 3,
+      "populatedColumnCount": 3,
+      "headerRow": 1,
+      "headerDetectionScore": 18,
+      "headers": [
+        {
+          "column": 1,
+          "original": "Crew Region"
+        },
+        {
+          "column": 2,
+          "original": "Project Manager"
+        },
+        {
+          "column": 3,
+          "original": "Active"
+        }
+      ],
+      "emptyHeaderColumns": [],
+      "duplicateHeaders": [],
+      "likelySensitiveHeaders": [
+        "Project Manager"
+      ],
+      "mergedRanges": [],
+      "hiddenRows": [],
+      "hiddenColumns": [],
+      "formulaCount": 0,
+      "formulaCachedValueCount": 0,
+      "dateCellCount": 0,
+      "numericCellCount": 0,
+      "numericFormats": [],
+      "identifierDuplicates": [],
+      "headerless": false,
+      "referenceLikeSheet": true,
+      "cellValuesOmitted": true
+    },
+    {
+      "name": "LOKASYON",
+      "rowCount": 220,
+      "populatedRowCount": 220,
+      "columnCount": 1,
+      "populatedColumnCount": 1,
+      "headerRow": 1,
+      "headerDetectionScore": 6,
+      "headers": [
+        {
+          "column": 1,
+          "original": "KKS"
+        }
+      ],
+      "emptyHeaderColumns": [],
+      "duplicateHeaders": [],
+      "likelySensitiveHeaders": [],
+      "mergedRanges": [],
+      "hiddenRows": [],
+      "hiddenColumns": [],
+      "formulaCount": 0,
+      "formulaCachedValueCount": 0,
+      "dateCellCount": 0,
+      "numericCellCount": 0,
+      "numericFormats": [],
+      "identifierDuplicates": [],
+      "headerless": false,
+      "referenceLikeSheet": true,
+      "cellValuesOmitted": true
+    }
+  ],
+  "possibleHeaderRelationships": [
+    {
+      "fromSheet": "İHTAR TABLOSU_DTO",
+      "toSheet": "ÖNERİLENUYGULANAN CEZAİ İŞLEM",
+      "sharedHeaders": [
+        "ÖNERİLEN AKSİYON",
+        "ÖNERİLEN UZAKLAŞTIRMA GÜN SAYISI",
+        "UYGULANAN CEZAİ İŞLEM",
+        "UYGULANAN UZAKLAŞTIRMA GÜN SAYISI"
+      ]
+    },
+    {
+      "fromSheet": "FİRMA _ ALT YÜKLENİCİ",
+      "toSheet": "BÖLGE-PM",
+      "sharedHeaders": [
+        "Active"
+      ]
+    }
+  ],
+  "valueJoinCandidates": [
+    {
+      "fromSheet": "İHTAR TABLOSU_DTO",
+      "fromHeader": "FİRMA / ALT YÜKLENİCİ",
+      "toSheet": "FİRMA _ ALT YÜKLENİCİ",
+      "toHeader": "Company",
+      "matchingDistinctValues": 22,
+      "matchingSourceRows": 2737
+    },
+    {
+      "fromSheet": "İHTAR TABLOSU_DTO",
+      "fromHeader": "İHLAL YAPILAN BÖLGE",
+      "toSheet": "BÖLGE-PM",
+      "toHeader": "Crew Region",
+      "matchingDistinctValues": 14,
+      "matchingSourceRows": 2737
+    },
+    {
+      "fromSheet": "İHTAR TABLOSU_DTO",
+      "fromHeader": "SORUMLU PROJE MÜDÜRÜ",
+      "toSheet": "BÖLGE-PM",
+      "toHeader": "Project Manager",
+      "matchingDistinctValues": 8,
+      "matchingSourceRows": 2666
+    },
+    {
+      "fromSheet": "İHTAR TABLOSU_DTO",
+      "fromHeader": "İHLAL YAPILAN LOKASYON",
+      "toSheet": "LOKASYON",
+      "toHeader": "KKS",
+      "matchingDistinctValues": 62,
+      "matchingSourceRows": 1832
+    },
+    {
+      "fromSheet": "İHTAR TABLOSU_DTO",
+      "fromHeader": "ANA İHLAL TÜRÜ",
+      "toSheet": "İHLAL TÜRLERİ",
+      "toHeader": "Ana İhlal Türü",
+      "matchingDistinctValues": 6,
+      "matchingSourceRows": 2737
+    },
+    {
+      "fromSheet": "İHTAR TABLOSU_DTO",
+      "fromHeader": "ALT İHLAL TÜRÜ",
+      "toSheet": "İHLAL TÜRLERİ",
+      "toHeader": "Alt İhlal Türü",
+      "matchingDistinctValues": 17,
+      "matchingSourceRows": 2737
+    }
+  ],
+  "cellValuesOmitted": true,
+  "warnings": [
+    "ExcelJS inspection is bounded by workbook memory size; unsupported macros/external links are not executed."
+  ]
+}

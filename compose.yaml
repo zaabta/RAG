@@ -1,0 +1,155 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f
+    environment:
+      PGDATA: /var/lib/postgresql/data
+    ports:
+      - '127.0.0.1:5433:5432'
+    volumes:
+      - sitepilot_pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    stop_grace_period: 1m
+    networks:
+      - sitepilot-network
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U sitepilot -d sitepilot_rag']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  storage-init:
+    image: sitepilot-upload:local
+    user: '0:0'
+    command:
+      - sh
+      - -ec
+      - chown -R 10001:10001 /app/storage/uploads /app/storage/model-cache && chmod 0700 /app/storage/uploads /app/storage/model-cache
+    volumes:
+      - sitepilot_uploads:/app/storage/uploads
+      - sitepilot_model_cache:/app/storage/model-cache
+    restart: 'no'
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sitepilot-upload:local
+    command: ['node', 'src/sitepilot/docker-entrypoint.mjs']
+    environment:
+      NODE_ENV: production
+      SITEPILOT_ROLE: api
+      FILE_STORAGE_ROOT: /app/storage/uploads
+      HF_HOME: /app/storage/model-cache
+      HOME: /home/sitepilot
+      XDG_CACHE_HOME: /home/sitepilot/.cache
+      SITEPILOT_EMBEDDING_THREADS: '1'
+      DATABASE_URL: ${DATABASE_URL_DOCKER:?Set DATABASE_URL_DOCKER to the existing PostgreSQL endpoint at postgres:5432}
+      SITEPILOT_JWT_SECRET: ${SITEPILOT_JWT_SECRET:?Set SITEPILOT_JWT_SECRET}
+      PORT: '3210'
+      HOST: 0.0.0.0
+      SITEPILOT_UPLOAD_MAX_QUEUED: ${SITEPILOT_UPLOAD_MAX_QUEUED:-50}
+      SITEPILOT_UPLOAD_STORAGE_RESERVE_BYTES: ${SITEPILOT_UPLOAD_STORAGE_RESERVE_BYTES:-134217728}
+      SITEPILOT_DELETE_ORIGINALS_AFTER_HOURS: ${SITEPILOT_DELETE_ORIGINALS_AFTER_HOURS:-}
+      SITEPILOT_LLM_PROVIDER: ${SITEPILOT_LLM_PROVIDER:-}
+      SITEPILOT_LLM_MODEL: ${SITEPILOT_LLM_MODEL:-gemini-3.5-flash-lite}
+      SITEPILOT_LLM_TIMEOUT_MS: ${SITEPILOT_LLM_TIMEOUT_MS:-60000}
+      SITEPILOT_EXTERNAL_LLM_DATA_ALLOWED: ${SITEPILOT_EXTERNAL_LLM_DATA_ALLOWED:-false}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    ports:
+      - '127.0.0.1:${SITEPILOT_API_PORT:-3210}:3210'
+    volumes:
+      - sitepilot_uploads:/app/storage/uploads
+      - sitepilot_model_cache:/app/storage/model-cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 1m
+    cpus: 1.0
+    mem_limit: 1536m
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    networks:
+      - sitepilot-network
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3210/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    image: sitepilot-upload:local
+    environment:
+      NODE_ENV: production
+      SITEPILOT_ROLE: worker
+      SITEPILOT_UPLOAD_WORKERS: '1'
+      FILE_STORAGE_ROOT: /app/storage/uploads
+      HF_HOME: /app/storage/model-cache
+      HOME: /home/sitepilot
+      XDG_CACHE_HOME: /home/sitepilot/.cache
+      SITEPILOT_EMBEDDING_THREADS: '2'
+      DATABASE_URL: ${DATABASE_URL_DOCKER:?Set DATABASE_URL_DOCKER to the existing PostgreSQL endpoint at postgres:5432}
+      SITEPILOT_JWT_SECRET: ${SITEPILOT_JWT_SECRET:?Set SITEPILOT_JWT_SECRET}
+      PORT: '3210'
+      HOST: 0.0.0.0
+      SITEPILOT_UPLOAD_LEASE_MS: ${SITEPILOT_UPLOAD_LEASE_MS:-120000}
+      SITEPILOT_UPLOAD_HEARTBEAT_MS: ${SITEPILOT_UPLOAD_HEARTBEAT_MS:-20000}
+      SITEPILOT_DELETE_ORIGINALS_AFTER_HOURS: ${SITEPILOT_DELETE_ORIGINALS_AFTER_HOURS:-}
+    volumes:
+      - sitepilot_uploads:/app/storage/uploads
+      - sitepilot_model_cache:/app/storage/model-cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30m
+    cpus: 2.0
+    mem_limit: 2g
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    networks:
+      - sitepilot-network
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3210/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  sitepilot_pgdata:
+    name: sitepilot_pgdata
+    external: true
+  sitepilot_uploads:
+    name: sitepilot_uploads
+    external: true
+  sitepilot_model_cache:
+    name: sitepilot_model_cache
+    external: true
+
+networks:
+  sitepilot-network:
+    name: sitepilot-network
+    external: true

@@ -25,6 +25,12 @@ graph config, and Postgres/pgvector for self-hosted vector storage.
 For deeper guides and production patterns, use the docs:
 [typegraph.ai/docs](https://typegraph.ai/docs).
 
+The SitePilot upload API and worker Docker setup, persistent upload volume, and
+backup/restore procedure are documented in
+[`docs/sitepilot-docker-storage.md`](docs/sitepilot-docker-storage.md).
+The SitePilot module inventory and architecture audit are in
+[`docs/sitepilot-architecture.md`](docs/sitepilot-architecture.md).
+
 ## Install
 
 Install the SDK, the pgvector adapter, a Postgres client, and the AI provider
@@ -91,7 +97,9 @@ const config = {
     entities: {
       organization: {
         description: 'A company, customer, vendor, or partner.',
-        vocabulary: [{ vocabulary: 'schema.org', id: 'Organization', uri: 'https://schema.org/Organization' }],
+        vocabulary: [
+          { vocabulary: 'schema.org', id: 'Organization', uri: 'https://schema.org/Organization' },
+        ],
       },
       person: { description: 'A human user, employee, or contact.' },
       system: { description: 'A software system or business application.' },
@@ -127,17 +135,17 @@ Primary records use the same naming shape where applicable:
 
 The main public namespaces are:
 
-| Namespace | Purpose |
-| --- | --- |
-| `tg.bucket` | Named containers for documents and events. Search accepts bucket ids or bucket names. |
-| `tg.document` | Durable long-form content with chunks and embeddings. |
-| `tg.event` | Time-anchored business occurrences with participants and attached documents. |
-| `tg.thread` | Ordered containers; turns are stored as linked events. |
-| `tg.search` | Unified retrieval over selected resources. |
-| `tg.graph` | Entity, fact, edge, external ID, merge, explore, and graph search APIs. |
-| `tg.memory` | Private memory, conversation extraction, progressive memory context, and database-backed memory artifacts. |
-| `tg.job` | Job tracking primitives. |
-| `tg.policy` | Governance policy CRUD when a policy store is configured. |
+| Namespace     | Purpose                                                                                                    |
+| ------------- | ---------------------------------------------------------------------------------------------------------- |
+| `tg.bucket`   | Named containers for documents and events. Search accepts bucket ids or bucket names.                      |
+| `tg.document` | Durable long-form content with chunks and embeddings.                                                      |
+| `tg.event`    | Time-anchored business occurrences with participants and attached documents.                               |
+| `tg.thread`   | Ordered containers; turns are stored as linked events.                                                     |
+| `tg.search`   | Unified retrieval over selected resources.                                                                 |
+| `tg.graph`    | Entity, fact, edge, external ID, merge, explore, and graph search APIs.                                    |
+| `tg.memory`   | Private memory, conversation extraction, progressive memory context, and database-backed memory artifacts. |
+| `tg.job`      | Job tracking primitives.                                                                                   |
+| `tg.policy`   | Governance policy CRUD when a policy store is configured.                                                  |
 
 ## Identity, Graphs, And Access
 
@@ -214,7 +222,8 @@ await tg.event.ingest(
       entityRef('product_area', 'auth'),
       entityRef('issue', 'sso_redirect_loop'),
     ],
-    content: 'Acme reports that SAML login loops after the IdP callback. This is blocking enterprise rollout.',
+    content:
+      'Acme reports that SAML login loops after the IdP callback. This is blocking enterprise rollout.',
     metadata: { provider: 'gong', meetingId: '123', severity: 'high' },
   },
   {
@@ -278,22 +287,17 @@ await tg.thread.addTurn(
 `resources` selects what to search:
 
 ```ts
-type SearchResource =
-  | 'documents'
-  | 'events'
-  | 'threads'
-  | 'entities'
-  | 'facts'
+type SearchResource = 'documents' | 'events' | 'threads' | 'entities' | 'facts'
 ```
 
 `weights` controls how candidates are scored and fused:
 
-| Weight | Purpose | Default |
-| --- | --- | --- |
-| `semantic` | Embedding search over content-bearing records | `1` |
-| `bm25` | Keyword/BM25 search fused with semantic results | `0.7` |
-| `graph` | Graph-aware facts, entities, and chunk expansion | `0.5` |
-| `recency` | Prefer fresher records in final scoring | `0.3` |
+| Weight     | Purpose                                          | Default |
+| ---------- | ------------------------------------------------ | ------- |
+| `semantic` | Embedding search over content-bearing records    | `1`     |
+| `bm25`     | Keyword/BM25 search fused with semantic results  | `0.7`   |
+| `graph`    | Graph-aware facts, entities, and chunk expansion | `0.5`   |
+| `recency`  | Prefer fresher records in final scoring          | `0.3`   |
 
 Set a weight to `false` to disable that signal.
 
@@ -318,7 +322,7 @@ const cohereReranker: Reranker<QueryChunkResult> = {
     })
 
     return ranking
-      .map(item => candidates[item.originalIndex])
+      .map((item) => candidates[item.originalIndex])
       .filter((candidate): candidate is QueryChunkResult => candidate !== undefined)
   },
 }
@@ -472,15 +476,19 @@ await tg.memory.remember('Dana prefers concise renewal risk summaries.', {
   graphExtraction: true,
 })
 
-await tg.thread.addTurn('thread_support_123', {
-  role: 'user',
-  content: 'Please keep the rollout plan short and implementation-ready.',
-}, {
-  context: {
-    userId: UserId('dana'),
-    threadId: ThreadId('thread_support_123'),
+await tg.thread.addTurn(
+  'thread_support_123',
+  {
+    role: 'user',
+    content: 'Please keep the rollout plan short and implementation-ready.',
   },
-})
+  {
+    context: {
+      userId: UserId('dana'),
+      threadId: ThreadId('thread_support_123'),
+    },
+  },
+)
 
 await tg.memory.extractThread('thread_support_123', {
   context: { userId: UserId('dana') },
@@ -507,21 +515,21 @@ Markdown files are written.
 
 ## Packages
 
-| Package | Purpose |
-| --- | --- |
-| [`@typegraph-ai/sdk`](packages/sdk) | Main SDK: initialization, documents, events, threads, search, graph, memory, jobs, policies, and types. |
-| [`@typegraph-ai/adapter-pgvector`](packages/adapters/pgvector) | Core Postgres + pgvector adapter and memory/graph backing store. |
-| [`@typegraph-ai/adapter-pgvector-neon`](packages/adapters/pgvector-neon) | Neon convenience adapter. |
-| [`@typegraph-ai/adapter-pgvector-pg`](packages/adapters/pgvector-pg) | node-postgres convenience adapter. |
-| [`@typegraph-ai/adapter-pgvector-supabase`](packages/adapters/pgvector-supabase) | Supabase/Postgres convenience adapter. |
-| [`@typegraph-ai/adapter-pgvector-rds`](packages/adapters/pgvector-rds) | AWS RDS/Postgres convenience adapter. |
-| [`@typegraph-ai/adapter-pgvector-nile`](packages/adapters/pgvector-nile) | Nile/Postgres convenience adapter. |
-| [`@typegraph-ai/adapter-pgvector-prisma`](packages/adapters/pgvector-prisma) | Prisma convenience adapter. |
-| [`@typegraph-ai/adapter-redis`](packages/adapters/redis) | Redis-backed extraction coreference cache for self-hosted deployments. |
-| [`@typegraph-ai/adapter-redis-upstash`](packages/adapters/redis-upstash) | Upstash Redis coreference cache adapter for self-hosted deployments. |
-| [`@typegraph-ai/vercel-ai-provider`](packages/vercel-ai-provider) | Vercel AI SDK tools and middleware. |
-| [`@typegraph-ai/mcp-server`](packages/mcp-server) | MCP server package. |
-| [`@typegraph-ai/otel`](packages/otel) | OpenTelemetry event sink integration. |
+| Package                                                                          | Purpose                                                                                                 |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| [`@typegraph-ai/sdk`](packages/sdk)                                              | Main SDK: initialization, documents, events, threads, search, graph, memory, jobs, policies, and types. |
+| [`@typegraph-ai/adapter-pgvector`](packages/adapters/pgvector)                   | Core Postgres + pgvector adapter and memory/graph backing store.                                        |
+| [`@typegraph-ai/adapter-pgvector-neon`](packages/adapters/pgvector-neon)         | Neon convenience adapter.                                                                               |
+| [`@typegraph-ai/adapter-pgvector-pg`](packages/adapters/pgvector-pg)             | node-postgres convenience adapter.                                                                      |
+| [`@typegraph-ai/adapter-pgvector-supabase`](packages/adapters/pgvector-supabase) | Supabase/Postgres convenience adapter.                                                                  |
+| [`@typegraph-ai/adapter-pgvector-rds`](packages/adapters/pgvector-rds)           | AWS RDS/Postgres convenience adapter.                                                                   |
+| [`@typegraph-ai/adapter-pgvector-nile`](packages/adapters/pgvector-nile)         | Nile/Postgres convenience adapter.                                                                      |
+| [`@typegraph-ai/adapter-pgvector-prisma`](packages/adapters/pgvector-prisma)     | Prisma convenience adapter.                                                                             |
+| [`@typegraph-ai/adapter-redis`](packages/adapters/redis)                         | Redis-backed extraction coreference cache for self-hosted deployments.                                  |
+| [`@typegraph-ai/adapter-redis-upstash`](packages/adapters/redis-upstash)         | Upstash Redis coreference cache adapter for self-hosted deployments.                                    |
+| [`@typegraph-ai/vercel-ai-provider`](packages/vercel-ai-provider)                | Vercel AI SDK tools and middleware.                                                                     |
+| [`@typegraph-ai/mcp-server`](packages/mcp-server)                                | MCP server package.                                                                                     |
+| [`@typegraph-ai/otel`](packages/otel)                                            | OpenTelemetry event sink integration.                                                                   |
 
 ## Development
 

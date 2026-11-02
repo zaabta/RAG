@@ -2,3 +2,7 @@ packages:
   - 'packages/*'
   - 'packages/adapters/*'
   - 'benchmarks-cloud'
+
+onlyBuiltDependencies:
+  - esbuild
+  - onnxruntime-node

@@ -26,9 +26,21 @@ describe('IndexEngine', () => {
     ingestOptions: ReturnType<typeof createMockBucket>['ingestOptions'],
     opts?: Parameters<IndexEngine['ingestBatch']>[2],
   ) {
-    const chunkOpts = { chunkSize: ingestOptions.chunkSize ?? 100, chunkOverlap: ingestOptions.chunkOverlap ?? 20 }
-    const items = await Promise.all(documents.map(async document => ({ document, chunks: await defaultChunker(document, chunkOpts) })))
-    return engine.ingestBatch(bucketId, items, { tenantId: 'tenant-1', ...ingestOptions, ...(opts ?? {}) })
+    const chunkOpts = {
+      chunkSize: ingestOptions.chunkSize ?? 100,
+      chunkOverlap: ingestOptions.chunkOverlap ?? 20,
+    }
+    const items = await Promise.all(
+      documents.map(async (document) => ({
+        document,
+        chunks: await defaultChunker(document, chunkOpts),
+      })),
+    )
+    return engine.ingestBatch(bucketId, items, {
+      tenantId: 'tenant-1',
+      ...ingestOptions,
+      ...(opts ?? {}),
+    })
   }
 
   describe('ingestBatch', () => {
@@ -48,8 +60,9 @@ describe('IndexEngine', () => {
       const chunks = [{ content: 'Chunk 0', chunkIndex: 0 }]
       const engine = new IndexEngine(adapter, embedding)
 
-      await expect(engine.ingestBatch(bucket.id, [{ document, chunks }], null))
-        .rejects.toThrow('ingest requires identity.tenantId.')
+      await expect(engine.ingestBatch(bucket.id, [{ document, chunks }], null)).rejects.toThrow(
+        'ingest requires identity.tenantId.',
+      )
     })
 
     it('skips unchanged documents (idempotency)', async () => {
@@ -80,11 +93,13 @@ describe('IndexEngine', () => {
       expect(result2.skipped).toBe(2)
       expect(result2.inserted).toBe(0)
       expect(result2.updated).toBe(0)
-      const countCalls = adapter.calls.filter(c => c.method === 'countChunks')
-      expect(countCalls.at(-1)!.args[1]).toEqual(expect.objectContaining({
-        groupId: 'Novel-30752',
-        idempotencyKey: 'doc-2',
-      }))
+      const countCalls = adapter.calls.filter((c) => c.method === 'countChunks')
+      expect(countCalls.at(-1)!.args[1]).toEqual(
+        expect.objectContaining({
+          groupId: 'Novel-30752',
+          idempotencyKey: 'doc-2',
+        }),
+      )
     })
 
     it('re-indexes on content change', async () => {
@@ -97,12 +112,15 @@ describe('IndexEngine', () => {
       const updatedDocs = [createTestDocument({ id: 'document-1', content: 'Updated content' })]
       const result = await ingestDocs(engine, bucket.id, updatedDocs, ingestOptions)
       expect(result.inserted).toBe(1)
-      expect(adapter.calls.some(call =>
-        call.method === 'deleteDocuments' &&
-        call.args[0]?.tenantId === 'tenant-1' &&
-        call.args[0]?.bucketId === bucket.id &&
-        call.args[0]?.documentIds?.[0] === 'document-1'
-      )).toBe(true)
+      expect(
+        adapter.calls.some(
+          (call) =>
+            call.method === 'deleteDocuments' &&
+            call.args[0]?.tenantId === 'tenant-1' &&
+            call.args[0]?.bucketId === bucket.id &&
+            call.args[0]?.documentIds?.[0] === 'document-1',
+        ),
+      ).toBe(true)
     })
 
     it('replaces stale chunks when deterministic document content changes', async () => {
@@ -112,23 +130,37 @@ describe('IndexEngine', () => {
       const engine = new IndexEngine(adapter, embedding)
       const opts = { tenantId: 'tenant-1', ...ingestOptions }
 
-      await engine.ingestBatch(bucket.id, [{
-        document,
-        chunks: [
-          { content: 'Original chunk 0', chunkIndex: 0 },
-          { content: 'Original chunk 1', chunkIndex: 1 },
-          { content: 'Original chunk 2', chunkIndex: 2 },
+      await engine.ingestBatch(
+        bucket.id,
+        [
+          {
+            document,
+            chunks: [
+              { content: 'Original chunk 0', chunkIndex: 0 },
+              { content: 'Original chunk 1', chunkIndex: 1 },
+              { content: 'Original chunk 2', chunkIndex: 2 },
+            ],
+          },
         ],
-      }], opts)
+        opts,
+      )
 
-      await engine.ingestBatch(bucket.id, [{
-        document: updated,
-        chunks: [{ content: 'Updated chunk 0', chunkIndex: 0 }],
-      }], opts)
+      await engine.ingestBatch(
+        bucket.id,
+        [
+          {
+            document: updated,
+            chunks: [{ content: 'Updated chunk 0', chunkIndex: 0 }],
+          },
+        ],
+        opts,
+      )
 
       const chunks = adapter._chunks.get(embeddingModelKey(embedding)) ?? []
-      expect(chunks.filter(chunk => chunk.documentId === 'document-1')).toHaveLength(1)
-      expect(chunks.find(chunk => chunk.documentId === 'document-1')?.content).toBe('Updated chunk 0')
+      expect(chunks.filter((chunk) => chunk.documentId === 'document-1')).toHaveLength(1)
+      expect(chunks.find((chunk) => chunk.documentId === 'document-1')?.content).toBe(
+        'Updated chunk 0',
+      )
     })
 
     it('re-indexes on model change', async () => {
@@ -149,7 +181,7 @@ describe('IndexEngine', () => {
       const { bucket, ingestOptions } = createMockBucket({ documents: documents })
       const engine = new IndexEngine(adapter, embedding)
       await ingestDocs(engine, bucket.id, documents, ingestOptions)
-      expect(adapter.calls.some(c => c.method === 'ensureModel')).toBe(true)
+      expect(adapter.calls.some((c) => c.method === 'ensureModel')).toBe(true)
     })
 
     it('supports dryRun', async () => {
@@ -158,7 +190,7 @@ describe('IndexEngine', () => {
       const engine = new IndexEngine(adapter, embedding)
       const result = await ingestDocs(engine, bucket.id, documents, ingestOptions, { dryRun: true })
       expect(result.inserted).toBe(1)
-      expect(adapter.calls.filter(c => c.method === 'upsertDocumentChunks')).toHaveLength(0)
+      expect(adapter.calls.filter((c) => c.method === 'upsertDocumentChunks')).toHaveLength(0)
     })
 
     it('strips markdown for embedding when configured', async () => {
@@ -209,7 +241,7 @@ describe('IndexEngine', () => {
       const engine = new IndexEngine(adapter, embedding)
       await ingestDocs(engine, bucket.id, [document], ingestOptions)
 
-      const recordCall = adapter.calls.find(c => c.method === 'upsertDocumentRecord')!
+      const recordCall = adapter.calls.find((c) => c.method === 'upsertDocumentRecord')!
       expect(recordCall.args[0].url).toBeUndefined()
       const stored = adapter._chunks.get(embeddingModelKey(embedding))!
       expect(stored[0]!.metadata.url).toBeUndefined()
@@ -228,7 +260,7 @@ describe('IndexEngine', () => {
       )
 
       expect(result.inserted).toBe(1)
-      const recordCall = adapter.calls.find(c => c.method === 'upsertDocumentRecord')!
+      const recordCall = adapter.calls.find((c) => c.method === 'upsertDocumentRecord')!
       expect(recordCall.args[0].url).toBeUndefined()
       const stored = adapter._chunks.get(embeddingModelKey(embedding))!
       expect(stored[0]!.metadata.url).toBeUndefined()
@@ -256,7 +288,7 @@ describe('IndexEngine', () => {
       const engine = new IndexEngine(adapter, embedding)
       await ingestDocs(engine, bucket.id, [document], ingestOptions)
 
-      expect(adapter.calls.some(c => c.method === 'upsertDocumentRecord')).toBe(true)
+      expect(adapter.calls.some((c) => c.method === 'upsertDocumentRecord')).toBe(true)
     })
 
     it('uses canonical document id when hash dedup is missing', async () => {
@@ -271,11 +303,16 @@ describe('IndexEngine', () => {
       const events: typegraphEvent[] = []
       const extractFromChunk = vi.fn().mockResolvedValue({ entities: [] })
       const engine = new IndexEngine(adapter, embedding, {
-        emit: event => { events.push(event) },
+        emit: (event) => {
+          events.push(event)
+        },
       })
       engine.tripleExtractor = { extractFromChunk } as any
 
-      await engine.ingestBatch(bucket.id, [{ document, chunks }], { tenantId: 'tenant-1', graphExtraction: true })
+      await engine.ingestBatch(bucket.id, [{ document, chunks }], {
+        tenantId: 'tenant-1',
+        graphExtraction: true,
+      })
       const canonicalId = adapter._chunks.get(embeddingModelKey(embedding))![0]!.documentId
       const ikey = resolveIdempotencyKey(document, ['url'])
       await adapter.hashStore.delete(buildHashStoreKey('tenant-1', bucket.id, ikey))
@@ -283,15 +320,20 @@ describe('IndexEngine', () => {
       events.length = 0
       extractFromChunk.mockClear()
 
-      const result = await engine.ingestBatch(bucket.id, [{ document, chunks }], { tenantId: 'tenant-1', graphExtraction: true })
+      const result = await engine.ingestBatch(bucket.id, [{ document, chunks }], {
+        tenantId: 'tenant-1',
+        graphExtraction: true,
+      })
 
       expect(result.inserted).toBe(0)
       expect(result.updated).toBe(1)
-      const upsertCall = adapter.calls.find(c => c.method === 'upsertDocumentChunks')!
+      const upsertCall = adapter.calls.find((c) => c.method === 'upsertDocumentChunks')!
       expect((upsertCall.args[1] as Array<{ documentId: string }>)[0]!.documentId).toBe(canonicalId)
       expect(extractFromChunk.mock.calls[0]![3]).toBe(canonicalId)
-      expect(adapter.calls.filter(c => c.method === 'updateDocumentStatus').at(-1)!.args[1]).toBe(canonicalId)
-      expect(events.find(e => e.eventType === 'index.document')!.targetId).toBe(canonicalId)
+      expect(adapter.calls.filter((c) => c.method === 'updateDocumentStatus').at(-1)!.args[1]).toBe(
+        canonicalId,
+      )
+      expect(events.find((e) => e.eventType === 'index.document')!.targetId).toBe(canonicalId)
     })
 
     it('leaves graph extraction failures retryable', async () => {
@@ -308,12 +350,15 @@ describe('IndexEngine', () => {
         extractFromChunk: vi.fn().mockRejectedValue(new Error('Graph write failed')),
       } as any
 
-      const failed = await engine.ingestBatch(bucket.id, [{ document, chunks }], { tenantId: 'tenant-1', graphExtraction: true })
+      const failed = await engine.ingestBatch(bucket.id, [{ document, chunks }], {
+        tenantId: 'tenant-1',
+        graphExtraction: true,
+      })
 
       expect(failed.inserted).toBe(0)
       expect(failed.updated).toBe(0)
       expect(failed.extraction?.failed).toBe(1)
-      const failedStatus = adapter.calls.filter(c => c.method === 'updateDocumentStatus').at(-1)!
+      const failedStatus = adapter.calls.filter((c) => c.method === 'updateDocumentStatus').at(-1)!
       expect(failedStatus.args[2]).toBe('failed')
       const ikey = resolveIdempotencyKey(document, ['url'])
       const storeKey = buildHashStoreKey('tenant-1', bucket.id, ikey)
@@ -323,20 +368,35 @@ describe('IndexEngine', () => {
       engine.tripleExtractor = {
         extractFromChunk: vi.fn().mockResolvedValue({ entities: [] }),
       } as any
-      const retried = await engine.ingestBatch(bucket.id, [{ document, chunks }], { tenantId: 'tenant-1', graphExtraction: true })
+      const retried = await engine.ingestBatch(bucket.id, [{ document, chunks }], {
+        tenantId: 'tenant-1',
+        graphExtraction: true,
+      })
 
       expect(retried.skipped).toBe(0)
       expect(retried.inserted).toBe(0)
       expect(retried.updated).toBe(1)
       expect(await adapter.hashStore.get(storeKey)).not.toBeNull()
-      expect(adapter.calls.some(c => c.method === 'upsertDocumentChunks')).toBe(true)
-      expect(adapter.calls.filter(c => c.method === 'updateDocumentStatus').at(-1)!.args[2]).toBe('complete')
+      expect(adapter.calls.some((c) => c.method === 'upsertDocumentChunks')).toBe(true)
+      expect(adapter.calls.filter((c) => c.method === 'updateDocumentStatus').at(-1)!.args[2]).toBe(
+        'complete',
+      )
     })
 
     it('serializes graph extraction even when concurrency is higher', async () => {
       const documents = [
-        createTestDocument({ id: undefined, name: 'Documents A', url: 'https://example.com/a', content: 'Alice met Bob.' }),
-        createTestDocument({ id: undefined, name: 'Documents B', url: 'https://example.com/b', content: 'Carol met Dana.' }),
+        createTestDocument({
+          id: undefined,
+          name: 'Documents A',
+          url: 'https://example.com/a',
+          content: 'Alice met Bob.',
+        }),
+        createTestDocument({
+          id: undefined,
+          name: 'Documents B',
+          url: 'https://example.com/b',
+          content: 'Carol met Dana.',
+        }),
       ]
       const { bucket } = createMockBucket({ documents: [] })
       let active = 0
@@ -344,7 +404,7 @@ describe('IndexEngine', () => {
       const extractFromChunk = vi.fn(async () => {
         active++
         maxActive = Math.max(maxActive, active)
-        await new Promise(resolve => setTimeout(resolve, 5))
+        await new Promise((resolve) => setTimeout(resolve, 5))
         active--
         return { entities: [] }
       })
@@ -353,7 +413,10 @@ describe('IndexEngine', () => {
 
       await engine.ingestBatch(
         bucket.id,
-        documents.map(document => ({ document, chunks: [{ content: document.content, chunkIndex: 0 }] })),
+        documents.map((document) => ({
+          document,
+          chunks: [{ content: document.content, chunkIndex: 0 }],
+        })),
         { tenantId: 'tenant-1', graphExtraction: true, concurrency: 2 },
       )
 
@@ -385,12 +448,14 @@ describe('IndexEngine', () => {
       )
 
       expect(extractFromChunk).toHaveBeenCalledTimes(1)
-      expect(extractFromChunk.mock.calls[0]![7]).toEqual(expect.objectContaining({
-        tenantId: 'tenant-1',
-        organizationId: 'org-1',
-        groupId: 'Novel-30752',
-        graphId: 'internal-source-graph',
-      }))
+      expect(extractFromChunk.mock.calls[0]![7]).toEqual(
+        expect.objectContaining({
+          tenantId: 'tenant-1',
+          organizationId: 'org-1',
+          groupId: 'Novel-30752',
+          graphId: 'internal-source-graph',
+        }),
+      )
     })
   })
 
@@ -403,12 +468,42 @@ describe('IndexEngine', () => {
         { content: 'Chunk 1', chunkIndex: 1 },
       ]
       const engine = new IndexEngine(adapter, embedding)
-      const result = await engine.ingestWithChunks(bucket.id, document, chunks, { tenantId: 'tenant-1' })
+      const result = await engine.ingestWithChunks(bucket.id, document, chunks, {
+        tenantId: 'tenant-1',
+      })
       expect(result.inserted).toBe(1)
       expect(result.total).toBe(1)
 
       const stored = adapter._chunks.get(embeddingModelKey(embedding))!
       expect(stored).toHaveLength(2)
+    })
+
+    it('reports embedding and vector-store progress for pre-chunked ingestion', async () => {
+      const document = createTestDocument()
+      const { bucket } = createMockBucket({ documents: [] })
+      const events: Array<{ phase: string; done: number; total: number }> = []
+      const engine = new IndexEngine(adapter, embedding)
+
+      await engine.ingestWithChunks(
+        bucket.id,
+        document,
+        [
+          { content: 'Chunk 0', chunkIndex: 0 },
+          { content: 'Chunk 1', chunkIndex: 1 },
+        ],
+        {
+          tenantId: 'tenant-1',
+          onProgress: (event) =>
+            events.push({ phase: event.phase, done: event.done, total: event.total }),
+        },
+      )
+
+      expect(events).toEqual([
+        { phase: 'embed', done: 0, total: 2 },
+        { phase: 'embed', done: 2, total: 2 },
+        { phase: 'store', done: 0, total: 2 },
+        { phase: 'store', done: 2, total: 2 },
+      ])
     })
 
     it('requires tenantId when opts are null', async () => {
@@ -417,8 +512,9 @@ describe('IndexEngine', () => {
       const chunks = [{ content: 'Chunk 0', chunkIndex: 0 }]
       const engine = new IndexEngine(adapter, embedding)
 
-      await expect(engine.ingestWithChunks(bucket.id, document, chunks, null))
-        .rejects.toThrow('ingest requires identity.tenantId.')
+      await expect(engine.ingestWithChunks(bucket.id, document, chunks, null)).rejects.toThrow(
+        'ingest requires identity.tenantId.',
+      )
     })
 
     it('supports dryRun', async () => {
@@ -426,9 +522,12 @@ describe('IndexEngine', () => {
       const { bucket } = createMockBucket({ documents: [] })
       const chunks = [{ content: 'Chunk 0', chunkIndex: 0 }]
       const engine = new IndexEngine(adapter, embedding)
-      const result = await engine.ingestWithChunks(bucket.id, document, chunks, { tenantId: 'tenant-1', dryRun: true })
+      const result = await engine.ingestWithChunks(bucket.id, document, chunks, {
+        tenantId: 'tenant-1',
+        dryRun: true,
+      })
       expect(result.inserted).toBe(1)
-      expect(adapter.calls.filter(c => c.method === 'upsertDocumentChunks')).toHaveLength(0)
+      expect(adapter.calls.filter((c) => c.method === 'upsertDocumentChunks')).toHaveLength(0)
     })
 
     it('sets status to failed on error', async () => {
@@ -437,12 +536,16 @@ describe('IndexEngine', () => {
       const chunks = [{ content: 'Chunk 0', chunkIndex: 0 }]
 
       const failEmbedding = createMockEmbedding()
-      failEmbedding.embed = async () => { throw new Error('Embed failed') }
+      failEmbedding.embed = async () => {
+        throw new Error('Embed failed')
+      }
 
       const engine = new IndexEngine(adapter, failEmbedding)
-      await expect(engine.ingestWithChunks(bucket.id, document, chunks, { tenantId: 'tenant-1' })).rejects.toThrow('Embed failed')
+      await expect(
+        engine.ingestWithChunks(bucket.id, document, chunks, { tenantId: 'tenant-1' }),
+      ).rejects.toThrow('Embed failed')
 
-      const statusCalls = adapter.calls.filter(c => c.method === 'updateDocumentStatus')
+      const statusCalls = adapter.calls.filter((c) => c.method === 'updateDocumentStatus')
       if (statusCalls.length > 0) {
         expect(statusCalls[statusCalls.length - 1]!.args[2]).toBe('failed')
       }
@@ -457,13 +560,18 @@ describe('IndexEngine', () => {
         extractFromChunk: vi.fn().mockRejectedValue(new Error('No output generated.')),
       } as any
 
-      const result = await engine.ingestWithChunks(bucket.id, document, chunks, { tenantId: 'tenant-1', graphExtraction: true })
+      const result = await engine.ingestWithChunks(bucket.id, document, chunks, {
+        tenantId: 'tenant-1',
+        graphExtraction: true,
+      })
 
       expect(result.extraction?.failed).toBe(1)
-      expect(result.extraction?.failedChunks?.[0]).toEqual(expect.objectContaining({
-        reason: 'error',
-        message: 'No output generated.',
-      }))
+      expect(result.extraction?.failedChunks?.[0]).toEqual(
+        expect.objectContaining({
+          reason: 'error',
+          message: 'No output generated.',
+        }),
+      )
     })
 
     it('uses canonical document id for pre-chunked reprocessing', async () => {
@@ -479,19 +587,27 @@ describe('IndexEngine', () => {
       const engine = new IndexEngine(adapter, embedding)
       engine.tripleExtractor = { extractFromChunk } as any
 
-      await engine.ingestWithChunks(bucket.id, document, chunks, { tenantId: 'tenant-1', graphExtraction: true })
+      await engine.ingestWithChunks(bucket.id, document, chunks, {
+        tenantId: 'tenant-1',
+        graphExtraction: true,
+      })
       const canonicalId = adapter._chunks.get(embeddingModelKey(embedding))![0]!.documentId
       adapter.calls.length = 0
       extractFromChunk.mockClear()
 
-      const result = await engine.ingestWithChunks(bucket.id, document, chunks, { tenantId: 'tenant-1', graphExtraction: true })
+      const result = await engine.ingestWithChunks(bucket.id, document, chunks, {
+        tenantId: 'tenant-1',
+        graphExtraction: true,
+      })
 
       expect(result.inserted).toBe(0)
       expect(result.updated).toBe(1)
-      const upsertCall = adapter.calls.find(c => c.method === 'upsertDocumentChunks')!
+      const upsertCall = adapter.calls.find((c) => c.method === 'upsertDocumentChunks')!
       expect((upsertCall.args[1] as Array<{ documentId: string }>)[0]!.documentId).toBe(canonicalId)
       expect(extractFromChunk.mock.calls[0]![3]).toBe(canonicalId)
-      expect(adapter.calls.filter(c => c.method === 'updateDocumentStatus').at(-1)!.args[1]).toBe(canonicalId)
+      expect(adapter.calls.filter((c) => c.method === 'updateDocumentStatus').at(-1)!.args[1]).toBe(
+        canonicalId,
+      )
     })
 
     it('extracts graph facts from chunks without graph-owned chunk persistence', async () => {
@@ -505,18 +621,22 @@ describe('IndexEngine', () => {
       const engine = new IndexEngine(adapter, embedding)
       engine.tripleExtractor = { extractFromChunk } as any
 
-      await engine.ingestWithChunks(bucket.id, document, chunks, { graphExtraction: true, tenantId: 'tenant-1' })
+      await engine.ingestWithChunks(bucket.id, document, chunks, {
+        graphExtraction: true,
+        tenantId: 'tenant-1',
+      })
 
-      const upsertCallIndex = adapter.calls.findIndex(call => call.method === 'upsertDocumentChunks')
+      const upsertCallIndex = adapter.calls.findIndex(
+        (call) => call.method === 'upsertDocumentChunks',
+      )
       expect(upsertCallIndex).toBeGreaterThanOrEqual(0)
       expect(extractFromChunk).toHaveBeenCalledTimes(2)
-      expect(extractFromChunk.mock.calls[0]).toEqual(expect.arrayContaining([
-        'Alice met Bob.',
-        bucket.id,
-        0,
-        'document-chunks',
-      ]))
-      expect(extractFromChunk.mock.calls[0]![7]).toEqual(expect.objectContaining({ tenantId: 'tenant-1' }))
+      expect(extractFromChunk.mock.calls[0]).toEqual(
+        expect.arrayContaining(['Alice met Bob.', bucket.id, 0, 'document-chunks']),
+      )
+      expect(extractFromChunk.mock.calls[0]![7]).toEqual(
+        expect.objectContaining({ tenantId: 'tenant-1' }),
+      )
     })
 
     it('passes accumulated entity context to later chunks', async () => {
@@ -526,18 +646,20 @@ describe('IndexEngine', () => {
         { content: 'Cole Conway entered the saloon.', chunkIndex: 0 },
         { content: 'Conway met Steve Sharp there.', chunkIndex: 1 },
       ]
-      const extractFromChunk = vi.fn()
+      const extractFromChunk = vi
+        .fn()
         .mockResolvedValueOnce({ entities: [{ name: 'Cole Conway', type: 'person' }] })
         .mockResolvedValueOnce({ entities: [{ name: 'Steve Sharp', type: 'person' }] })
       const engine = new IndexEngine(adapter, embedding)
       engine.tripleExtractor = { extractFromChunk } as any
 
-      await engine.ingestWithChunks(bucket.id, document, chunks, { tenantId: 'tenant-1', graphExtraction: true })
+      await engine.ingestWithChunks(bucket.id, document, chunks, {
+        tenantId: 'tenant-1',
+        graphExtraction: true,
+      })
 
       expect(extractFromChunk).toHaveBeenCalledTimes(2)
-      expect(extractFromChunk.mock.calls[1]![5]).toEqual([
-        { name: 'Cole Conway', type: 'person' },
-      ])
+      expect(extractFromChunk.mock.calls[1]![5]).toEqual([{ name: 'Cole Conway', type: 'person' }])
     })
   })
 })

@@ -2,7 +2,12 @@ import type { VectorStoreAdapter, HashRecord } from '../types/adapter.js'
 import type { Embedder } from '../embedding/provider.js'
 import { embedTexts } from '../embedding/provider.js'
 import { embeddingModelKey } from '../embedding/provider.js'
-import type { IngestOptions, IndexResult, ExtractionFailure } from '../types/index-types.js'
+import type {
+  IngestOptions,
+  IndexProgressEvent,
+  IndexResult,
+  ExtractionFailure,
+} from '../types/index-types.js'
 import type { DocumentInput, Chunk } from '../types/document.js'
 import type { AccessScope } from '../types/identity.js'
 import { chunkIdFor, generateId } from '../utils/id.js'
@@ -12,7 +17,12 @@ import type { TripleExtractor, EntityContext } from './triple-extractor.js'
 import type { typegraphEventSink } from '../types/events.js'
 import type { typegraphLogger } from '../types/logger.js'
 import type { KnowledgeGraphBridge } from '../types/graph-bridge.js'
-import type { ExtractionCoreferenceCache, Extractor, ExtractedEntity, ExtractedRelation } from '../types/extractor.js'
+import type {
+  ExtractionCoreferenceCache,
+  Extractor,
+  ExtractedEntity,
+  ExtractedRelation,
+} from '../types/extractor.js'
 import type { CompiledOntology } from '../types/ontology.js'
 import { optionalCompactObject } from '../utils/input.js'
 import { ConfigError } from '../types/errors.js'
@@ -23,7 +33,7 @@ import { sanitizeEntityBatch } from './entity-canonicalization.js'
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
   return Promise.race([
     promise,
-    new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), ms)),
+    new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms)),
   ])
 }
 
@@ -32,24 +42,24 @@ const TRIPLE_EXTRACTION_TIMEOUT_MS = 360_000 // 6 minutes per chunk
 type GraphExtractionRunner = Pick<TripleExtractor, 'extractFromChunk'>
 
 function sanitizeText(value: string): string {
-  return sanitizeInvalidSurrogates(value
-    .replace(/\u0000/g, '')
-    .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, ' '))
+  return sanitizeInvalidSurrogates(
+    value.replace(/\u0000/g, '').replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, ' '),
+  )
 }
 
 function sanitizeInvalidSurrogates(value: string): string {
   let out = ''
   for (let i = 0; i < value.length; i++) {
     const code = value.charCodeAt(i)
-    if (code >= 0xD800 && code <= 0xDBFF) {
+    if (code >= 0xd800 && code <= 0xdbff) {
       const next = value.charCodeAt(i + 1)
-      if (next >= 0xDC00 && next <= 0xDFFF) {
+      if (next >= 0xdc00 && next <= 0xdfff) {
         out += value.charAt(i) + value.charAt(i + 1)
         i++
       } else {
         out += '\uFFFD'
       }
-    } else if (code >= 0xDC00 && code <= 0xDFFF) {
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
       out += '\uFFFD'
     } else {
       out += value[i]
@@ -83,20 +93,21 @@ function resolveRelationEntity(
   ref: ExtractedRelation['source'],
   entityByRef: Map<string, ExtractedEntity>,
 ): ExtractedEntity {
-  return entityByRef.get(ref.id)
-    ?? entityByRef.get(refKey(ref.type, ref.id))
-    ?? {
+  return (
+    entityByRef.get(ref.id) ??
+    entityByRef.get(refKey(ref.type, ref.id)) ?? {
       id: ref.id,
       name: ref.id,
       type: ref.type,
       aliases: [],
     }
+  )
 }
 
 function cacheEntitiesToContext(entities: ExtractedEntity[]): EntityContext[] {
   return entities
-    .filter(entity => entity.name && entity.type)
-    .map(entity => ({
+    .filter((entity) => entity.name && entity.type)
+    .map((entity) => ({
       name: entity.name,
       type: entity.type,
       typeCandidates: entity.typeCandidates,
@@ -106,7 +117,7 @@ function cacheEntitiesToContext(entities: ExtractedEntity[]): EntityContext[] {
 }
 
 function contextToCacheEntities(entities: EntityContext[]): ExtractedEntity[] {
-  return entities.map(entity => ({
+  return entities.map((entity) => ({
     name: entity.name,
     type: entity.type,
     typeCandidates: entity.typeCandidates,
@@ -144,45 +155,50 @@ class ConfiguredExtractorRunner implements GraphExtractionRunner {
     chunkId?: string,
     ontology?: CompiledOntology,
   ): Promise<{ entities: EntityContext[] } | undefined> {
-    const result = await this.extractor.extract({
-      id: chunkId ?? `${documentId ?? bucketId}:${chunkIndex ?? 0}`,
-      kind: 'document',
-      content,
-      metadata,
-      ontology,
-    }, {
-      coreferenceCache: this.coreferenceCache,
-      ontology,
-      log: {
-        debug: (message, data) => this.logger?.debug?.(message, data),
-        warn: (message, data) => this.logger?.warn?.(message, data),
-        error: (message, data) => this.logger?.error?.(message, data),
+    const result = await this.extractor.extract(
+      {
+        id: chunkId ?? `${documentId ?? bucketId}:${chunkIndex ?? 0}`,
+        kind: 'document',
+        content,
+        metadata,
+        ontology,
       },
-    })
+      {
+        coreferenceCache: this.coreferenceCache,
+        ontology,
+        log: {
+          debug: (message, data) => this.logger?.debug?.(message, data),
+          warn: (message, data) => this.logger?.warn?.(message, data),
+          error: (message, data) => this.logger?.error?.(message, data),
+        },
+      },
+    )
 
     const cleanEntities = sanitizeEntityBatch(result.entities, ontology)
 
     if (this.graph.addEntityMentions && cleanEntities.length > 0) {
-      await this.graph.addEntityMentions(cleanEntities.map(entity => ({
-        name: entity.name,
-        type: entity.type,
-        typeCandidates: entity.typeCandidates,
-        aliases: entity.aliases ?? [],
-        description: entity.description,
-        content,
-        bucketId,
-        ...(chunkIndex !== undefined ? { chunkIndex } : {}),
-        ...(documentId ? { documentId } : {}),
-        ...(identity?.tenantId ? { tenantId: identity.tenantId } : {}),
-        ...(identity?.organizationId ? { organizationId: identity.organizationId } : {}),
-        ...(identity?.graphId ? { graphId: identity.graphId } : {}),
-        ...(identity?.groupId ? { groupId: identity.groupId } : {}),
-        ...(identity?.userId ? { userId: identity.userId } : {}),
-        ...(identity?.agentId ? { agentId: identity.agentId } : {}),
-        ...(identity?.threadId ? { threadId: identity.threadId } : {}),
-        ...(accessScope ? { accessScope } : {}),
-        ...(metadata ? { metadata } : {}),
-      })))
+      await this.graph.addEntityMentions(
+        cleanEntities.map((entity) => ({
+          name: entity.name,
+          type: entity.type,
+          typeCandidates: entity.typeCandidates,
+          aliases: entity.aliases ?? [],
+          description: entity.description,
+          content,
+          bucketId,
+          ...(chunkIndex !== undefined ? { chunkIndex } : {}),
+          ...(documentId ? { documentId } : {}),
+          ...(identity?.tenantId ? { tenantId: identity.tenantId } : {}),
+          ...(identity?.organizationId ? { organizationId: identity.organizationId } : {}),
+          ...(identity?.graphId ? { graphId: identity.graphId } : {}),
+          ...(identity?.groupId ? { groupId: identity.groupId } : {}),
+          ...(identity?.userId ? { userId: identity.userId } : {}),
+          ...(identity?.agentId ? { agentId: identity.agentId } : {}),
+          ...(identity?.threadId ? { threadId: identity.threadId } : {}),
+          ...(accessScope ? { accessScope } : {}),
+          ...(metadata ? { metadata } : {}),
+        })),
+      )
     }
 
     if (this.graph.addTriple && result.relations.length > 0) {
@@ -231,7 +247,7 @@ class ConfiguredExtractorRunner implements GraphExtractionRunner {
     }
 
     return {
-      entities: cleanEntities.map(entity => ({
+      entities: cleanEntities.map((entity) => ({
         name: entity.name,
         type: entity.type,
         typeCandidates: entity.typeCandidates,
@@ -264,7 +280,12 @@ export class IndexEngine {
     if (!this.knowledgeGraph) {
       throw new ConfigError('Custom extractor requires a configured knowledge graph.')
     }
-    this.tripleExtractor = new ConfiguredExtractorRunner(extractor, this.knowledgeGraph, this.logger, this.extractionCoreferenceCache)
+    this.tripleExtractor = new ConfiguredExtractorRunner(
+      extractor,
+      this.knowledgeGraph,
+      this.logger,
+      this.extractionCoreferenceCache,
+    )
   }
 
   private async replaceExistingDocumentIfContentChanged(args: {
@@ -295,7 +316,10 @@ export class IndexEngine {
     chunks: Chunk[],
     rawOpts?: IngestOptions | null,
   ): Promise<IndexResult> {
-    const opts = optionalCompactObject<IngestOptions>(rawOpts, 'IndexEngine.ingestWithChunks') as IngestOptions
+    const opts = optionalCompactObject<IngestOptions>(
+      rawOpts,
+      'IndexEngine.ingestWithChunks',
+    ) as IngestOptions
     const cleanDocument = sanitizeDocument(document)
     const cleanChunks = chunks.map(sanitizeChunk)
     const { tenantId, organizationId, groupId, userId, agentId, threadId, dryRun = false } = opts
@@ -305,6 +329,27 @@ export class IndexEngine {
 
     const modelId = embeddingModelKey(this.embedding)
     const startMs = Date.now()
+    const emitProgress = (phase: IndexProgressEvent['phase'], done: number) => {
+      try {
+        opts.onProgress?.({
+          phase,
+          bucketId,
+          tenantId,
+          total: cleanChunks.length,
+          done,
+          skipped: 0,
+          updated: documentWasCreated ? 0 : 1,
+          inserted: documentWasCreated ? 1 : 0,
+          pruned: 0,
+          failed: 0,
+        })
+      } catch (error) {
+        this.logger?.warn('Index progress callback failed.', {
+          phase,
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+        })
+      }
+    }
 
     if (!dryRun) {
       await this.adapter.ensureModel(modelId, this.embedding.dimensions)
@@ -352,8 +397,10 @@ export class IndexEngine {
     }
 
     try {
-      const textsForEmbedding = cleanChunks.map(c => this.preprocessForEmbedding(c.content, opts))
+      const textsForEmbedding = cleanChunks.map((c) => this.preprocessForEmbedding(c.content, opts))
+      emitProgress('embed', 0)
       const embeddings = await embedTexts(this.embedding, textsForEmbedding, 'document')
+      emitProgress('embed', cleanChunks.length)
 
       const propagated = this.propagateMetadata(cleanDocument, opts.propagateMetadata)
 
@@ -385,10 +432,14 @@ export class IndexEngine {
       }))
 
       if (!dryRun) {
+        emitProgress('store', 0)
         await this.adapter.upsertDocumentChunks(modelId, embeddedChunks)
+        emitProgress('store', cleanChunks.length)
       }
 
-      let extraction: { succeeded: number; failed: number; failedChunks?: ExtractionFailure[] } | undefined
+      let extraction:
+        | { succeeded: number; failed: number; failedChunks?: ExtractionFailure[] }
+        | undefined
       if (shouldExtract) {
         extraction = await this.extractTriplesForChunks(
           bucketId,
@@ -421,7 +472,12 @@ export class IndexEngine {
         }
 
         if (this.adapter.updateDocumentStatus) {
-          await this.adapter.updateDocumentStatus(tenantId, documentId, 'complete', cleanChunks.length)
+          await this.adapter.updateDocumentStatus(
+            tenantId,
+            documentId,
+            'complete',
+            cleanChunks.length,
+          )
         }
 
         await this.adapter.hashStore.set(storeKey, {
@@ -464,12 +520,25 @@ export class IndexEngine {
     items: Array<{ document: DocumentInput; chunks: Chunk[] }>,
     rawOpts?: IngestOptions | null,
   ): Promise<IndexResult> {
-    const opts = optionalCompactObject<IngestOptions>(rawOpts, 'IndexEngine.ingestBatch') as IngestOptions
+    const opts = optionalCompactObject<IngestOptions>(
+      rawOpts,
+      'IndexEngine.ingestBatch',
+    ) as IngestOptions
     const cleanItems = items.map(({ document, chunks }) => ({
       document: sanitizeDocument(document),
       chunks: chunks.map(sanitizeChunk),
     }))
-    const { tenantId, organizationId, groupId, userId, agentId, threadId, dryRun = false, traceId, spanId } = opts
+    const {
+      tenantId,
+      organizationId,
+      groupId,
+      userId,
+      agentId,
+      threadId,
+      dryRun = false,
+      traceId,
+      spanId,
+    } = opts
     const graphId = opts.graphId ?? 'public'
     if (!tenantId) throw new ConfigError('ingest requires identity.tenantId.')
     const shouldExtract = !!this.tripleExtractor && !dryRun && !!opts.graphExtraction
@@ -524,12 +593,16 @@ export class IndexEngine {
       document,
       contentHash: sha256(document.content),
       ikey: resolveIdempotencyKey(document, deduplicateBy),
-      storeKey: buildHashStoreKey(tenantId, bucketId, resolveIdempotencyKey(document, deduplicateBy)),
+      storeKey: buildHashStoreKey(
+        tenantId,
+        bucketId,
+        resolveIdempotencyKey(document, deduplicateBy),
+      ),
     }))
 
     let hashMap: Map<string, HashRecord> | undefined
     if (!dryRun) {
-      const allStoreKeys = documentMeta.map(m => m.storeKey)
+      const allStoreKeys = documentMeta.map((m) => m.storeKey)
       hashMap = this.adapter.hashStore.getMany
         ? await this.adapter.hashStore.getMany(allStoreKeys)
         : undefined
@@ -544,7 +617,7 @@ export class IndexEngine {
       // Hash store dedup: skip documents whose content + model haven't changed
       if (!dryRun) {
         stored = hashMap
-          ? hashMap.get(storeKey) ?? null
+          ? (hashMap.get(storeKey) ?? null)
           : await this.adapter.hashStore.get(storeKey)
         if (stored?.contentHash === contentHash && stored.embeddingModel === modelId) {
           const actualChunks = await this.adapter.countChunks(modelId, {
@@ -597,24 +670,32 @@ export class IndexEngine {
       }
 
       const textOffset = allTexts.length
-      const texts = chunks.map(c => this.preprocessForEmbedding(c.content, opts))
+      const texts = chunks.map((c) => this.preprocessForEmbedding(c.content, opts))
       allTexts.push(...texts)
 
-      prepared.push({ document, chunks, ikey, contentHash, documentId, documentWasCreated, textOffset })
+      prepared.push({
+        document,
+        chunks,
+        ikey,
+        contentHash,
+        documentId,
+        documentWasCreated,
+        textOffset,
+      })
     }
 
     // Phase 2: Single embedBatch call for all chunks across all documents
-    const allEmbeddings = allTexts.length > 0
-      ? await embedTexts(this.embedding, allTexts, 'document')
-      : []
+    const allEmbeddings =
+      allTexts.length > 0 ? await embedTexts(this.embedding, allTexts, 'document') : []
 
     // Phase 3: Per-document upsert + hash store. Graph writes are serialized
     // until the graph storage layer is race-safe.
     const { concurrency = 1 } = opts
     const effectiveConcurrency = shouldExtract ? 1 : concurrency
 
-    const processItem = async (item: typeof prepared[number]) => {
-      const { document, chunks, ikey, contentHash, documentId, documentWasCreated, textOffset } = item
+    const processItem = async (item: (typeof prepared)[number]) => {
+      const { document, chunks, ikey, contentHash, documentId, documentWasCreated, textOffset } =
+        item
       const embeddings = allEmbeddings.slice(textOffset, textOffset + chunks.length)
       const propagated = this.propagateMetadata(document, opts.propagateMetadata)
 
@@ -649,7 +730,9 @@ export class IndexEngine {
         await this.adapter.upsertDocumentChunks(modelId, embeddedChunks)
       }
 
-      let extraction: { succeeded: number; failed: number; failedChunks?: ExtractionFailure[] } | undefined
+      let extraction:
+        | { succeeded: number; failed: number; failedChunks?: ExtractionFailure[] }
+        | undefined
       if (shouldExtract) {
         extraction = await this.extractTriplesForChunks(
           bucketId,
@@ -718,7 +801,11 @@ export class IndexEngine {
         identity: { tenantId, organizationId, groupId, userId, agentId, threadId, graphId },
         targetId: documentId,
         targetType: 'document',
-        payload: { bucketId, chunkCount: chunks.length, status: documentWasCreated ? 'new' : 'updated' },
+        payload: {
+          bucketId,
+          chunkCount: chunks.length,
+          status: documentWasCreated ? 'new' : 'updated',
+        },
         traceId,
         spanId,
         timestamp: new Date(),
@@ -734,17 +821,25 @@ export class IndexEngine {
       // processItem is wrapped to never reject — errors are swallowed to prevent
       // unhandled promise rejections from crashing the process when concurrent
       // promises continue running after one fails.
-      const safeProcessItem = (item: typeof prepared[number]) =>
+      const safeProcessItem = (item: (typeof prepared)[number]) =>
         processItem(item).catch((err) => {
           processingFailed++
-          this.logger?.error?.('[typegraph] Document processing failed:', { documentId: item.documentId, idempotencyKey: item.ikey, error: err instanceof Error ? err.message : String(err) })
+          this.logger?.error?.('[typegraph] Document processing failed:', {
+            documentId: item.documentId,
+            idempotencyKey: item.ikey,
+            error: err instanceof Error ? err.message : String(err),
+          })
           this.eventSink?.emit({
             id: crypto.randomUUID(),
             eventType: 'index.document',
             identity: { tenantId, organizationId, groupId, userId, agentId, threadId, graphId },
             targetId: item.documentId,
             targetType: 'document',
-            payload: { bucketId, status: 'failed', error: err instanceof Error ? err.message : String(err) },
+            payload: {
+              bucketId,
+              status: 'failed',
+              error: err instanceof Error ? err.message : String(err),
+            },
             traceId,
             spanId,
             timestamp: new Date(),
@@ -752,7 +847,9 @@ export class IndexEngine {
         })
       const active = new Set<Promise<void>>()
       for (const item of prepared) {
-        const p = safeProcessItem(item).then(() => { active.delete(p) })
+        const p = safeProcessItem(item).then(() => {
+          active.delete(p)
+        })
         active.add(p)
         if (active.size >= effectiveConcurrency) {
           await Promise.race(active)
@@ -788,7 +885,10 @@ export class IndexEngine {
         await this.eventSink.flush()
       } catch (err) {
         // Flush failures are logged inside the sink; don't fail the ingest.
-        console.error('[typegraph] Post-ingest event flush failed:', err instanceof Error ? err.message : err)
+        console.error(
+          '[typegraph] Post-ingest event flush failed:',
+          err instanceof Error ? err.message : err,
+        )
       }
     }
 
@@ -847,7 +947,10 @@ export class IndexEngine {
 
     for (const chunk of chunks) {
       try {
-        const contextForChunk = contextManager.activeContextForChunk(chunk.content, chunk.chunkIndex)
+        const contextForChunk = contextManager.activeContextForChunk(
+          chunk.content,
+          chunk.chunkIndex,
+        )
 
         const extractionResult = await withTimeout(
           this.tripleExtractor!.extractFromChunk(
@@ -869,7 +972,11 @@ export class IndexEngine {
         if (extractionResult === undefined) {
           failed++
           failedChunks.push({ documentId, chunkIndex: chunk.chunkIndex, reason: 'timeout' })
-          this.logger?.warn?.('[typegraph] Triple extraction timed out', { documentId, chunkIndex: chunk.chunkIndex, bucketId })
+          this.logger?.warn?.('[typegraph] Triple extraction timed out', {
+            documentId,
+            chunkIndex: chunk.chunkIndex,
+            bucketId,
+          })
           continue
         }
 
@@ -878,15 +985,28 @@ export class IndexEngine {
       } catch (err) {
         failed++
         const msg = err instanceof Error ? err.message : String(err)
-        failedChunks.push({ documentId, chunkIndex: chunk.chunkIndex, reason: 'error', message: msg })
-        this.logger?.error?.('[typegraph] Triple extraction failed', { documentId, chunkIndex: chunk.chunkIndex, bucketId, error: msg })
+        failedChunks.push({
+          documentId,
+          chunkIndex: chunk.chunkIndex,
+          reason: 'error',
+          message: msg,
+        })
+        this.logger?.error?.('[typegraph] Triple extraction failed', {
+          documentId,
+          chunkIndex: chunk.chunkIndex,
+          bucketId,
+          error: msg,
+        })
       }
     }
 
     const cleanCacheContext = contextManager.toCacheEntities()
     if (this.extractionCoreferenceCache && cleanCacheContext.length > 0) {
       try {
-        await this.extractionCoreferenceCache.save(cacheKey, contextToCacheEntities(cleanCacheContext))
+        await this.extractionCoreferenceCache.save(
+          cacheKey,
+          contextToCacheEntities(cleanCacheContext),
+        )
       } catch (err) {
         this.logger?.warn?.('[typegraph] Coreference cache save failed', {
           bucketId,
@@ -896,9 +1016,7 @@ export class IndexEngine {
       }
     }
 
-    return failedChunks.length > 0
-      ? { succeeded, failed, failedChunks }
-      : { succeeded, failed }
+    return failedChunks.length > 0 ? { succeeded, failed, failedChunks } : { succeeded, failed }
   }
 
   private preprocessForEmbedding(content: string, opts: IngestOptions): string {
@@ -911,10 +1029,7 @@ export class IndexEngine {
     return content
   }
 
-  private propagateMetadata(
-    document: DocumentInput,
-    fields?: string[]
-  ): Record<string, unknown> {
+  private propagateMetadata(document: DocumentInput, fields?: string[]): Record<string, unknown> {
     if (!fields) {
       return {
         name: document.name,
