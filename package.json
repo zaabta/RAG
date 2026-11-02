@@ -30,7 +30,7 @@
     "clean": "turbo run clean",
     "sitepilot:dev-auth": "tsx scripts/sitepilot-dev-auth.mts",
     "sitepilot:dev-auth-test": "vitest run scripts/sitepilot-dev-auth.test.mts",
-    "sitepilot:workspace-test": "vitest run scripts/sitepilot-llm-provider.test.mts",
+    "sitepilot:workspace-test": "vitest run scripts/sitepilot-llm-provider.test.mts scripts/sitepilot-ollama.test.mts",
     "sitepilot:workspace-integration": "tsx scripts/sitepilot-workspace.integration.mts"
   },
   "devDependencies": {

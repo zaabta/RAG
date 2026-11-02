@@ -10,7 +10,11 @@ import {
   type WorkspaceIdentity,
   type WorkspaceStreamEvent,
 } from '../src/sitepilot/agent/sitepilot-workspace.mjs'
-import type { LlmProvider } from '../src/sitepilot/agent/sitepilot-llm-provider.mjs'
+import {
+  OllamaProvider,
+  type LlmChatMessage,
+  type LlmProvider,
+} from '../src/sitepilot/agent/sitepilot-llm-provider.mjs'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) throw new Error('DATABASE_URL is required')
@@ -303,6 +307,152 @@ try {
   )
     throw new Error('Mocked streaming answer did not emit incremental text with verified citations')
 
+  const ollamaRequests: Array<{
+    model: string
+    stream: boolean
+    think?: boolean
+    messages: LlmChatMessage[]
+  }> = []
+  const ollamaProvider = new OllamaProvider(
+    'http://127.0.0.1:11434',
+    'qwen3:8b',
+    5_000,
+    async (_input, init) => {
+      ollamaRequests.push(JSON.parse(String(init?.body)) as (typeof ollamaRequests)[number])
+      const chunks = [
+        { message: { content: 'Ollama synthetic ' }, done: false },
+        { message: { content: 'answer.', thinking: 'synthetic hidden reasoning' }, done: false },
+        { message: { content: '' }, done: true, prompt_eval_count: 18, eval_count: 4 },
+      ]
+      return new Response(chunks.map((item) => JSON.stringify(item)).join('\n') + '\n', {
+        headers: { 'content-type': 'application/x-ndjson' },
+      })
+    },
+  )
+  const ollamaWorkspace = new SitePilotWorkspace(
+    databaseUrl,
+    async () => [
+      {
+        content: 'A synthetic fixture contains four records in two regions.',
+        citation: {
+          source: 'synthetic-agent-fixture.xlsx',
+          sheet: 'Fixture',
+          rowStart: 2,
+          rowEnd: 5,
+          sourceRange: 'A2:C5',
+        },
+      },
+    ],
+    join(tmpdir(), 'sitepilot-workspace-fixtures'),
+    () => ollamaProvider,
+  )
+  const ollamaConversation = await createConversation(identity)
+  for (const question of ['Summarize the synthetic fixture.', 'What did you just summarize?']) {
+    const ollamaEvents: WorkspaceStreamEvent[] = []
+    await ollamaWorkspace.streamMessage(
+      ollamaConversation,
+      question,
+      identity,
+      new AbortController().signal,
+      (event) => ollamaEvents.push(event),
+    )
+    const deltasText = ollamaEvents
+      .filter(
+        (event): event is Extract<WorkspaceStreamEvent, { type: 'delta' }> =>
+          event.type === 'delta',
+      )
+      .map((event) => event.text)
+      .join('')
+    const complete = ollamaEvents.find(
+      (event): event is Extract<WorkspaceStreamEvent, { type: 'complete' }> =>
+        event.type === 'complete',
+    )
+    if (
+      deltasText !== 'Ollama synthetic answer.' ||
+      complete?.message.status !== 'complete' ||
+      complete.message.provider !== 'ollama' ||
+      complete.message.model !== 'qwen3:8b' ||
+      !complete.message.citations.length
+    )
+      throw new Error('Mocked Ollama Agent response did not persist and stream with citations')
+  }
+  await ollamaWorkspace.close()
+  if (
+    ollamaRequests.length !== 2 ||
+    ollamaRequests.some(
+      (request) => request.model !== 'qwen3:8b' || !request.stream || request.think !== false,
+    ) ||
+    !ollamaRequests[0]?.messages.some((message) => message.role === 'system') ||
+    !ollamaRequests[1]?.messages.some(
+      (message) => message.role === 'assistant' && message.content === 'Ollama synthetic answer.',
+    )
+  )
+    throw new Error('Mocked Ollama chat payload omitted Qwen3 settings or conversation history')
+  const ollamaSavedMessages = await pool.query(
+    `SELECT status,provider,model,citations FROM sitepilot_excel_test.agent_messages
+     WHERE conversation_id=$1 AND role='assistant' ORDER BY created_at`,
+    [ollamaConversation],
+  )
+  if (
+    ollamaSavedMessages.rows.length !== 2 ||
+    ollamaSavedMessages.rows.some(
+      (row) =>
+        row.status !== 'complete' ||
+        row.provider !== 'ollama' ||
+        row.model !== 'qwen3:8b' ||
+        !row.citations.length,
+    )
+  )
+    throw new Error(
+      'Mocked Ollama conversation did not persist provider, model, status, and citations',
+    )
+
+  const unavailableModelWorkspace = new SitePilotWorkspace(
+    databaseUrl,
+    async () => [
+      {
+        content: 'A synthetic fixture contains four records in two regions.',
+        citation: { source: 'synthetic-agent-fixture.xlsx', sheet: 'Fixture', rowStart: 2 },
+      },
+    ],
+    join(tmpdir(), 'sitepilot-workspace-fixtures'),
+    () =>
+      new OllamaProvider(
+        'http://127.0.0.1:11434',
+        'qwen3:8b',
+        5_000,
+        async () =>
+          new Response(JSON.stringify({ error: "model 'qwen3:8b' not found" }), { status: 404 }),
+      ),
+  )
+  const unavailableModelConversation = await createConversation(identity)
+  const unavailableModelEvents: WorkspaceStreamEvent[] = []
+  await unavailableModelWorkspace.streamMessage(
+    unavailableModelConversation,
+    'Summarize the synthetic fixture.',
+    identity,
+    new AbortController().signal,
+    (event) => unavailableModelEvents.push(event),
+  )
+  await unavailableModelWorkspace.close()
+  const unavailableModelMessage = await pool.query(
+    `SELECT status,provider,model,tool_metadata->>'errorCode' AS code
+     FROM sitepilot_excel_test.agent_messages WHERE conversation_id=$1 AND role='assistant'`,
+    [unavailableModelConversation],
+  )
+  const unavailableModelEvent = unavailableModelEvents.find(
+    (event): event is Extract<WorkspaceStreamEvent, { type: 'error' }> => event.type === 'error',
+  )
+  if (
+    unavailableModelEvent?.code !== 'MODEL_NOT_INSTALLED' ||
+    !unavailableModelEvent.message.toLowerCase().includes('not installed') ||
+    unavailableModelMessage.rows[0]?.status !== 'failed' ||
+    unavailableModelMessage.rows[0]?.provider !== 'ollama' ||
+    unavailableModelMessage.rows[0]?.model !== 'qwen3:8b' ||
+    unavailableModelMessage.rows[0]?.code !== 'MODEL_NOT_INSTALLED'
+  )
+    throw new Error('Missing Ollama model was not reported and persisted as MODEL_NOT_INSTALLED')
+
   const cancelledConversation = await createConversation(identity)
   const controller = new AbortController()
   const cancelledEvents: WorkspaceStreamEvent[] = []
@@ -402,6 +552,10 @@ try {
         'message pagination',
         'search-history pagination',
         'mocked incremental Agent stream with citations',
+        'mocked Ollama /api/chat streaming with Qwen3 reasoning suppression',
+        'mocked Ollama system prompt and persisted conversation history',
+        'Ollama provider/model/status/citation persistence',
+        'missing Ollama model reported as MODEL_NOT_INSTALLED',
         'stream cancellation persistence',
         'provider failure metadata persistence',
         'insufficient evidence refusal',

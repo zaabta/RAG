@@ -2,9 +2,39 @@
 
 The SitePilot HTTP service now provides user-scoped conversations, search history, and a document library using the existing PostgreSQL schema and upload volume. Migration `006_sitepilot_workspace` is applied by the existing migration runner at API/worker startup.
 
-## Gemini agent (development opt-in)
+## Local Ollama agent (opt-in)
 
-The chat route uses the official `@google/genai` SDK. It sends only up to five authorized, redacted search chunks plus a validated structured aggregate result. It does not send the workbook itself. The Agent API remains unavailable unless the API container has all of:
+The Agent can use a local Ollama server without enabling external LLM data
+processing. Set the following in the backend-only `.env.docker` file:
+
+```env
+SITEPILOT_LLM_PROVIDER=ollama
+SITEPILOT_LLM_MODEL=qwen3:8b
+SITEPILOT_OLLAMA_BASE_URL=http://host.docker.internal:11434
+SITEPILOT_LLM_TIMEOUT_MS=60000
+SITEPILOT_EXTERNAL_LLM_DATA_ALLOWED=false
+```
+
+With Docker Desktop on macOS or Windows, `host.docker.internal` resolves from
+the API container to the host. Ollama must be running on the host and listening
+on port `11434`; make it reachable from Docker Desktop, but restrict the host
+firewall to the local Docker/host network. Do not port-forward Ollama or expose
+it to the public internet. The backend rejects non-local Ollama URLs. You can
+check availability with `curl http://localhost:11434/api/tags`; this does not
+download a model. The application never pulls models. Download `qwen3:8b`
+separately on the host when convenient, then recreate the API container.
+For Qwen3, requests set `think: false`; reasoning fields and `<think>` blocks
+are withheld from streamed output. If Ollama reports that the configured model
+is missing, the Agent returns the `MODEL_NOT_INSTALLED` SSE error and persists
+that safe error code with the failed assistant message.
+
+Ollama uses its native `/api/chat` endpoint with system, prior conversation,
+and current evidence messages. `SITEPILOT_LLM_TIMEOUT_MS` bounds both complete
+and streaming requests.
+
+## Gemini agent (external opt-in)
+
+Gemini uses the official `@google/genai` SDK. It sends only up to five authorized, redacted search chunks plus a validated structured aggregate result. It does not send the workbook itself. External generation remains unavailable unless the API container has all of:
 
 ```env
 SITEPILOT_LLM_PROVIDER=gemini
@@ -15,7 +45,7 @@ GEMINI_API_KEY=<server-side key>
 
 Keep `GEMINI_API_KEY` in the backend-only `.env.docker`, never in the frontend or a `VITE_` variable. The checked-in example deliberately leaves external processing disabled. Do not enable billing. Confirm the key's Google AI Studio project has an available free tier before enabling generation; the application does not infer the key's billing eligibility. The provider timeout is bounded by `SITEPILOT_LLM_TIMEOUT_MS` (15 seconds by default, maximum 30 seconds).
 
-Without those settings, the API records an assistant failure and returns a clear unavailable response; document search continues to work. Provider calls include no logs of prompt text, document contents, or API keys. The current agent response is non-streaming.
+Without either a configured local Ollama provider or explicitly authorized Gemini settings, the API records an assistant failure and returns a clear unavailable response; document search continues to work. Provider calls include no logs of prompt text, document contents, or API keys. Agent responses stream incrementally through the authenticated SSE endpoint.
 
 ## APIs
 
