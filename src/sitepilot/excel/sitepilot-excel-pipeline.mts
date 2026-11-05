@@ -46,8 +46,8 @@ async function ensureBucket(typegraph: typegraphInstance, groupId: string): Prom
   await typegraph.bucket.upsert(
     {
       id: SITEPILOT_EXCEL_BUCKET_ID,
-      name: 'SitePilot Excel records',
-      description: 'Redacted record-level chunks from uploaded workbooks.',
+      name: 'SitePilot documents',
+      description: 'Authorized document chunks for SitePilot search.',
       graph: 'public',
       graphExtraction: false,
     },

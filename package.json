@@ -24,13 +24,17 @@
     "sitepilot:upload-test": "vitest run scripts/sitepilot-upload.test.mts",
     "sitepilot:upload-integration": "tsx scripts/sitepilot-upload-integration.mts",
     "sitepilot:docker-e2e": "tsx scripts/sitepilot-docker-e2e.mts",
+    "sitepilot:ollama-e2e": "tsx scripts/sitepilot-ollama-e2e.mts",
+    "sitepilot:rag-manual-e2e": "tsx scripts/sitepilot-rag-manual-regression-e2e.mts",
+    "sitepilot:bank-grounding-e2e": "tsx scripts/sitepilot-bank-grounding-e2e.mts",
+    "sitepilot:document-test": "vitest run scripts/sitepilot-document-parser.test.mts",
     "sitepilot:migration-integration": "tsx scripts/sitepilot-migration.integration.mts",
     "sitepilot:sql-perf-check": "tsx scripts/sitepilot-sql-perf-check.mts",
     "check:ci-coverage": "node scripts/check-ci-coverage.mjs",
     "clean": "turbo run clean",
     "sitepilot:dev-auth": "tsx scripts/sitepilot-dev-auth.mts",
     "sitepilot:dev-auth-test": "vitest run scripts/sitepilot-dev-auth.test.mts",
-    "sitepilot:workspace-test": "vitest run scripts/sitepilot-llm-provider.test.mts scripts/sitepilot-ollama.test.mts",
+    "sitepilot:workspace-test": "vitest run scripts/sitepilot-llm-provider.test.mts scripts/sitepilot-ollama.test.mts scripts/sitepilot-evidence.test.mts scripts/sitepilot-document-parser.test.mts scripts/sitepilot-agent-routing.test.mts",
     "sitepilot:workspace-integration": "tsx scripts/sitepilot-workspace.integration.mts"
   },
   "devDependencies": {
@@ -49,6 +53,10 @@
     "@typegraph-ai/sdk": "workspace:*",
     "dotenv": "^18.0.9",
     "exceljs": "^4.4.0",
+    "htmlparser2": "^12.0.0",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.13.0",
+    "marked": "^18.1.3",
     "pg": "^8.20.0",
     "tsx": "^4.23.15"
   }

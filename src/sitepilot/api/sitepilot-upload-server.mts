@@ -1,6 +1,6 @@
 import { createHmac, createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
   chmod,
   lstat,
@@ -22,13 +22,13 @@ import 'dotenv/config'
 import { typegraphInit } from '@typegraph-ai/sdk'
 
 import { parseExcelFile } from '../excel/sitepilot-excel-core.mjs'
-import { SitePilotWorkspace } from '../agent/sitepilot-workspace.mjs'
+import { syncParsedExcelWorkbook } from '../excel/sitepilot-excel-pipeline.mjs'
+import { selectAgentTools, SitePilotWorkspace } from '../agent/sitepilot-workspace.mjs'
 import {
   SITEPILOT_EXCEL_BUCKET_ID,
   createSitePilotExcelConfig,
   type SitePilotIdentity,
 } from '../excel/sitepilot-excel-config.mjs'
-import { syncParsedExcelWorkbook } from '../excel/sitepilot-excel-pipeline.mjs'
 import {
   SitePilotUploadJobs,
   type ClaimedUploadJob,
@@ -36,9 +36,13 @@ import {
   type UploadJobStage,
   stableUploadFileId,
 } from '../documents/sitepilot-upload-jobs.mjs'
+import { parseTextDocument } from '../documents/sitepilot-document-parser.mjs'
+import { indexParsedDocument } from '../documents/sitepilot-document-pipeline.mjs'
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-const MAX_MULTIPART_BYTES = MAX_UPLOAD_BYTES + 1024 * 1024
+const MAX_BATCH_FILES = 4
+const MAX_BATCH_MULTIPART_BYTES = MAX_UPLOAD_BYTES * 2 + 2 * 1024 * 1024
+const MAX_MULTIPART_BYTES = MAX_BATCH_MULTIPART_BYTES
 const MAX_ZIP_ENTRIES = 1000
 const MAX_ZIP_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
 const MAX_ZIP_ENTRY_BYTES = 50 * 1024 * 1024
@@ -96,10 +100,10 @@ export function resolveStoredUploadPath(storageDirectory: string, storageKey: st
     (relativePath.startsWith(`..${sep}`) || relativePath === '..' || isAbsolute(relativePath))
   ) {
     const suffix = storageKey.match(
-      /(?:^|[\\/])(sitepilot-upload-[A-Za-z0-9_-]+)[\\/]source\.xlsx$/,
+      /(?:^|[\\/])(sitepilot-upload-[A-Za-z0-9_-]+)[\\/]source\.(xlsx|docx|txt|md)$/i,
     )
     if (suffix) {
-      resolved = resolve(storageDirectory, suffix[1]!, 'source.xlsx')
+      resolved = resolve(storageDirectory, suffix[1]!, `source.${suffix[2]!.toLowerCase()}`)
       relativePath = relative(resolve(storageDirectory), resolved)
     }
   }
@@ -328,14 +332,118 @@ function makeJwtClaims(
   return authenticateUploadToken(authorization, secret)
 }
 
-function safeFileName(name: string): string {
+export function safeFileName(name: string): string {
   const clean = basename(name.replace(/\\/g, '/'))
     .replace(/[\u0000-\u001f\u007f]/g, '_')
     .slice(0, 255)
-  if (!clean || !clean.toLocaleLowerCase('en-US').endsWith('.xlsx')) {
-    throw new UploadRequestError(415, 'XLSX_EXTENSION_REQUIRED')
-  }
+  const extension = extname(clean).toLocaleLowerCase('en-US')
+  if (extension === '.doc') throw new UploadRequestError(415, 'LEGACY_DOC_UNSUPPORTED')
+  if (!clean || !['.xlsx', '.docx', '.txt', '.md'].includes(extension))
+    throw new UploadRequestError(415, 'UNSUPPORTED_DOCUMENT_FORMAT')
   return clean
+}
+
+export function validateDocxArchive(bytes: Buffer) {
+  if (bytes.length > MAX_UPLOAD_BYTES) throw new UploadRequestError(413, 'UPLOAD_TOO_LARGE')
+  const lowerBound = Math.max(0, bytes.length - 65_557)
+  let eocd = -1
+  for (let offset = bytes.length - 22; offset >= lowerBound; offset--) {
+    if (bytes.readUInt32LE(offset) === 0x06054b50) {
+      eocd = offset
+      break
+    }
+  }
+  if (eocd < 0) throw new UploadRequestError(400, 'INVALID_DOCX_ARCHIVE')
+  const disk = bytes.readUInt16LE(eocd + 4)
+  const centralDisk = bytes.readUInt16LE(eocd + 6)
+  const diskEntries = bytes.readUInt16LE(eocd + 8)
+  const entryCount = bytes.readUInt16LE(eocd + 10)
+  const centralSize = bytes.readUInt32LE(eocd + 12)
+  const centralOffset = bytes.readUInt32LE(eocd + 16)
+  const commentLength = bytes.readUInt16LE(eocd + 20)
+  if (
+    disk !== 0 ||
+    centralDisk !== 0 ||
+    diskEntries !== entryCount ||
+    entryCount === 0xffff ||
+    centralSize === 0xffffffff ||
+    centralOffset === 0xffffffff ||
+    eocd + 22 + commentLength !== bytes.length ||
+    centralOffset + centralSize > eocd ||
+    entryCount === 0 ||
+    entryCount > MAX_ZIP_ENTRIES
+  )
+    throw new UploadRequestError(400, 'UNSUPPORTED_DOCX_ARCHIVE')
+
+  const names = new Set<string>()
+  let cursor = centralOffset
+  let totalUncompressed = 0
+  for (let index = 0; index < entryCount; index++) {
+    if (cursor + 46 > centralOffset + centralSize || bytes.readUInt32LE(cursor) !== 0x02014b50)
+      throw new UploadRequestError(400, 'INVALID_DOCX_ARCHIVE')
+    const flags = bytes.readUInt16LE(cursor + 8)
+    const compressed = bytes.readUInt32LE(cursor + 20)
+    const uncompressed = bytes.readUInt32LE(cursor + 24)
+    const nameLength = bytes.readUInt16LE(cursor + 28)
+    const extraLength = bytes.readUInt16LE(cursor + 30)
+    const commentLength = bytes.readUInt16LE(cursor + 32)
+    const next = cursor + 46 + nameLength + extraLength + commentLength
+    if (
+      next > centralOffset + centralSize ||
+      compressed === 0xffffffff ||
+      uncompressed === 0xffffffff
+    )
+      throw new UploadRequestError(400, 'UNSUPPORTED_DOCX_ARCHIVE')
+    if (flags & 0x0001) throw new UploadRequestError(400, 'ENCRYPTED_ARCHIVE_NOT_ALLOWED')
+    const name = bytes.toString('utf8', cursor + 46, cursor + 46 + nameLength)
+    if (name.startsWith('/') || name.includes('\\') || name.split('/').includes('..'))
+      throw new UploadRequestError(400, 'UNSAFE_DOCX_ARCHIVE_PATH')
+    names.add(name)
+    if (uncompressed > MAX_ZIP_ENTRY_BYTES)
+      throw new UploadRequestError(413, 'ARCHIVE_ENTRY_TOO_LARGE')
+    totalUncompressed += uncompressed
+    if (totalUncompressed > MAX_ZIP_UNCOMPRESSED_BYTES)
+      throw new UploadRequestError(413, 'ARCHIVE_EXPANSION_LIMIT')
+    if (compressed === 0 ? uncompressed > 0 : uncompressed / compressed > MAX_COMPRESSION_RATIO)
+      throw new UploadRequestError(413, 'ARCHIVE_COMPRESSION_RATIO_LIMIT')
+    cursor = next
+  }
+  if (
+    cursor !== centralOffset + centralSize ||
+    !names.has('[Content_Types].xml') ||
+    !names.has('word/document.xml')
+  )
+    throw new UploadRequestError(400, 'NOT_A_SUPPORTED_DOCX_DOCUMENT')
+  return { entries: entryCount, uncompressedBytes: totalUncompressed }
+}
+
+export function validateSupportedUpload(name: string, mimeType: string, bytes: Buffer) {
+  const filename = safeFileName(name)
+  if (bytes.length === 0) throw new UploadRequestError(400, 'EMPTY_DOCUMENT')
+  if (bytes.length > MAX_UPLOAD_BYTES) throw new UploadRequestError(413, 'UPLOAD_TOO_LARGE')
+  const extension = extname(filename).toLocaleLowerCase('en-US')
+  const mime = mimeType.split(';', 1)[0]!.trim().toLocaleLowerCase('en-US')
+  const allowedMimeTypes: Record<string, string[]> = {
+    '.xlsx': [MIME_XLSX],
+    '.docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+    '.txt': ['text/plain'],
+    '.md': ['text/markdown', 'text/x-markdown', 'text/plain'],
+  }
+  if (!allowedMimeTypes[extension]?.includes(mime))
+    throw new UploadRequestError(415, 'DOCUMENT_MIME_TYPE_MISMATCH')
+  if (extension === '.xlsx') validateXlsxArchive(bytes)
+  else if (extension === '.docx') validateDocxArchive(bytes)
+  else {
+    let text: string
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    } catch {
+      throw new UploadRequestError(400, 'INVALID_UTF8_DOCUMENT')
+    }
+    if (!text.replace(/\u0000/gu, '').trim()) throw new UploadRequestError(400, 'EMPTY_DOCUMENT')
+    if (text.includes('\u0000')) throw new UploadRequestError(400, 'BINARY_TEXT_DOCUMENT')
+  }
+  return { filename, extension, sizeBytes: bytes.length }
 }
 
 function formatSse(event: {
@@ -430,6 +538,7 @@ export async function startUploadService(
           .slice(0, 5)
           .map((hit) => ({
             content: hit.content,
+            score: hit.score,
             citation: {
               source: String(hit.metadata.sourceFile ?? hit.metadata.fileName ?? 'Source document'),
               sheet: typeof hit.metadata.sheetName === 'string' ? hit.metadata.sheetName : null,
@@ -437,6 +546,17 @@ export async function startUploadService(
               rowEnd: typeof hit.metadata.rowEnd === 'number' ? hit.metadata.rowEnd : null,
               sourceRange:
                 typeof hit.metadata.sourceRange === 'string' ? hit.metadata.sourceRange : null,
+              section: Array.isArray(hit.metadata.headingPath)
+                ? hit.metadata.headingPath.filter(Boolean).join(' > ')
+                : null,
+              lineStart: typeof hit.metadata.lineStart === 'number' ? hit.metadata.lineStart : null,
+              lineEnd: typeof hit.metadata.lineEnd === 'number' ? hit.metadata.lineEnd : null,
+              paragraphStart:
+                typeof hit.metadata.paragraphStart === 'number'
+                  ? hit.metadata.paragraphStart
+                  : null,
+              paragraphEnd:
+                typeof hit.metadata.paragraphEnd === 'number' ? hit.metadata.paragraphEnd : null,
             },
           }))
       } finally {
@@ -444,6 +564,8 @@ export async function startUploadService(
       }
     },
     storageDirectory,
+    undefined,
+    selectAgentTools,
   )
   const leaseDurationMs = integerSetting(
     options.leaseDurationMs,
@@ -536,18 +658,20 @@ export async function startUploadService(
       if (!job.temp_path) throw new UploadRequestError(400, 'UPLOAD_FILE_MISSING')
       const uploadPath = resolveStoredUploadPath(storageDirectory, job.temp_path)
       const bytes = await readVerifiedUpload(uploadPath, storageDirectory, job.file_sha256)
-      validateXlsxArchive(bytes)
-      heartbeat = new Worker(new URL('../workers/sitepilot-upload-heartbeat.mjs', import.meta.url), {
-        workerData: {
-          databaseUrl,
-          jobId: job.job_id,
-          leaseOwner: job.lease_owner,
-          leaseToken: job.lease_token,
-          leaseGeneration: job.lease_generation,
-          leaseDurationMs,
-          heartbeatIntervalMs,
+      heartbeat = new Worker(
+        new URL('../workers/sitepilot-upload-heartbeat.mjs', import.meta.url),
+        {
+          workerData: {
+            databaseUrl,
+            jobId: job.job_id,
+            leaseOwner: job.lease_owner,
+            leaseToken: job.lease_token,
+            leaseGeneration: job.lease_generation,
+            leaseDurationMs,
+            heartbeatIntervalMs,
+          },
         },
-      })
+      )
       heartbeat.on('message', (message: { type?: string; code?: string }) => {
         if (message.type === 'lost') leaseLost = true
         if (message.type === 'error') {
@@ -563,44 +687,88 @@ export async function startUploadService(
           error.name === 'Error' ? 'HEARTBEAT_WORKER_ERROR' : 'HEARTBEAT_WORKER_START_FAILED'
       })
       const fileId = stableUploadFileId(job.tenant_id, job.group_id, job.file_sha256)
-      let workbook
-      try {
-        processingStage = 'parse_workbook'
-        workbook = await parseExcelFile(uploadPath, {
-          fileId,
-          fileName: job.original_name,
-          accessScope: `group:${job.group_id}`,
-          maxFileBytes: MAX_UPLOAD_BYTES,
+      const extension = extname(job.original_name).toLocaleLowerCase('en-US')
+      let completion: Record<string, unknown>
+      if (extension === '.xlsx') {
+        validateXlsxArchive(bytes)
+        let workbook
+        try {
+          processingStage = 'parse_workbook'
+          await progress('parsing', 0, null)
+          workbook = await parseExcelFile(uploadPath, {
+            fileId,
+            fileName: job.original_name,
+            accessScope: `group:${job.group_id}`,
+            maxFileBytes: MAX_UPLOAD_BYTES,
+          })
+        } catch {
+          throw new UploadRequestError(422, 'INVALID_OR_UNSUPPORTED_WORKBOOK')
+        }
+        await progress('parsing', 1, 1)
+        console.log('Upload workbook parsed:', {
+          jobId: job.job_id,
+          sheets: workbook.sheets.length,
+          records: workbook.totalRecords,
+          chunks: workbook.totalChunks,
         })
-      } catch {
-        throw new UploadRequestError(422, 'INVALID_OR_UNSUPPORTED_WORKBOOK')
+        await progress('chunking', workbook.totalChunks, workbook.totalChunks)
+        await progress('structured_import', 0, workbook.totalRecords)
+        const result = await syncParsedExcelWorkbook(
+          workbook,
+          databaseUrl,
+          identity,
+          async (stage, processed, total) => {
+            await progress(stage, processed, total)
+          },
+        )
+        completion = {
+          sheetCount: workbook.sheets.length,
+          recordCount: workbook.totalRecords,
+          chunkCount: workbook.totalChunks,
+          indexedRecords: result.indexed,
+          fileId,
+        }
+      } else {
+        if (extension === '.docx') validateDocxArchive(bytes)
+        else if (extension === '.doc') throw new UploadRequestError(415, 'LEGACY_DOC_UNSUPPORTED')
+        else if (extension !== '.txt' && extension !== '.md')
+          throw new UploadRequestError(415, 'UNSUPPORTED_DOCUMENT_FORMAT')
+        processingStage = 'parse_document'
+        await progress('parsing', 0, null)
+        let parsed
+        try {
+          parsed = await parseTextDocument(bytes, { fileId, fileName: job.original_name })
+        } catch (error) {
+          const code = error instanceof Error ? error.message : 'INVALID_DOCUMENT'
+          throw new UploadRequestError(
+            422,
+            /^[A-Z0-9_]{2,64}$/.test(code) ? code : 'INVALID_DOCUMENT',
+          )
+        }
+        await progress('parsing', 1, 1)
+        await progress('chunking', parsed.chunks.length, parsed.chunks.length)
+        await progress('embedding', 0, parsed.chunks.length)
+        processingStage = 'index_document'
+        const result = await indexParsedDocument(
+          parsed,
+          databaseUrl,
+          identity,
+          async (stage, processed, total) => progress(stage, processed, total),
+        )
+        completion = {
+          sheetCount: 0,
+          recordCount: 1,
+          chunkCount: parsed.chunks.length,
+          indexedRecords: result.indexed,
+          fileId,
+          fileType: parsed.fileType,
+        }
       }
-      console.log('Upload workbook parsed:', {
+      console.log('Upload TypeGraph sync finished:', {
         jobId: job.job_id,
-        sheets: workbook.sheets.length,
-        records: workbook.totalRecords,
-        chunks: workbook.totalChunks,
+        indexed: completion.indexedRecords,
       })
-      processingStage = 'write_chunk_progress'
-      await progress('chunking', workbook.totalChunks, workbook.totalChunks)
-      processingStage = 'structured_import_and_index'
-      await progress('structured_import', 0, workbook.totalRecords)
-      const result = await syncParsedExcelWorkbook(
-        workbook,
-        databaseUrl,
-        identity,
-        async (stage, processed, total) => {
-          await progress(stage, processed, total)
-        },
-      )
-      console.log('Upload TypeGraph sync finished:', { jobId: job.job_id, indexed: result.indexed })
-      const completedStorageKey = await jobs.complete(job, {
-        sheetCount: workbook.sheets.length,
-        recordCount: workbook.totalRecords,
-        chunkCount: workbook.totalChunks,
-        indexedRecords: result.indexed,
-        fileId,
-      })
+      const completedStorageKey = await jobs.complete(job, completion)
       if (!completedStorageKey) throw new Error('Job lease was lost before publication')
       console.log('Upload job completed:', {
         jobId: job.job_id,
@@ -702,6 +870,10 @@ export async function startUploadService(
         'x-accel-buffering': 'no',
       })
       response.flushHeaders()
+      const sseHeartbeat = setInterval(() => {
+        if (!response.destroyed && !response.writableEnded) response.write(': keepalive\n\n')
+      }, 15_000)
+      sseHeartbeat.unref()
       const emit = (event: Parameters<Parameters<SitePilotWorkspace['streamMessage']>[4]>[0]) => {
         if (!abortController.signal.aborted && !response.destroyed)
           response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
@@ -721,6 +893,7 @@ export async function startUploadService(
           message: 'The document assistant is unavailable.',
         })
       } finally {
+        clearInterval(sseHeartbeat)
         response.off('close', onClose)
         if (!response.destroyed) response.end()
       }
@@ -769,8 +942,6 @@ export async function startUploadService(
       }
       activeUploadRequests++
       try {
-        if ((await jobs.queuedCount()) >= maxQueuedJobs)
-          throw new UploadRequestError(429, 'UPLOAD_QUEUE_CAPACITY_REACHED')
         const contentType = request.headers['content-type'] ?? ''
         if (!contentType.toLocaleLowerCase('en-US').startsWith('multipart/form-data;')) {
           request.resume()
@@ -789,49 +960,78 @@ export async function startUploadService(
         } catch {
           throw new UploadRequestError(400, 'INVALID_MULTIPART_BODY')
         }
-        const files = form.getAll('file')
-        if (files.length !== 1 || typeof files[0] === 'string' || !(files[0] instanceof File)) {
-          throw new UploadRequestError(400, 'ONE_FILE_FIELD_REQUIRED')
+        const fileParts = [...form.getAll('file'), ...form.getAll('files')]
+        if (
+          fileParts.length === 0 ||
+          fileParts.length > MAX_BATCH_FILES ||
+          fileParts.some((part) => typeof part === 'string' || !(part instanceof File))
+        )
+          throw new UploadRequestError(400, 'ONE_TO_FOUR_DOCUMENT_FILES_REQUIRED')
+        const uploads: Array<{ originalName: string; extension: string; bytes: Buffer }> = []
+        let totalBytes = 0
+        for (const part of fileParts) {
+          const file = part as File
+          const bytes = Buffer.from(await file.arrayBuffer())
+          const validated = validateSupportedUpload(file.name, file.type, bytes)
+          totalBytes += bytes.length
+          if (totalBytes > MAX_UPLOAD_BYTES * 2)
+            throw new UploadRequestError(413, 'BATCH_UPLOAD_TOO_LARGE')
+          uploads.push({ originalName: validated.filename, extension: validated.extension, bytes })
         }
-        const file = files[0]
-        const originalName = safeFileName(file.name)
-        if (file.type !== MIME_XLSX) throw new UploadRequestError(415, 'XLSX_MIME_TYPE_REQUIRED')
-        if (file.size <= 0 || file.size > MAX_UPLOAD_BYTES)
-          throw new UploadRequestError(413, 'UPLOAD_TOO_LARGE')
-        const bytes = Buffer.from(await file.arrayBuffer())
-        validateXlsxArchive(bytes)
+        if ((await jobs.queuedCount()) + uploads.length > maxQueuedJobs)
+          throw new UploadRequestError(429, 'UPLOAD_QUEUE_CAPACITY_REACHED')
         const filesystem = await statfs(storageDirectory)
-        if (filesystem.bavail * filesystem.bsize < bytes.length + storageReserveBytes)
+        if (filesystem.bavail * filesystem.bsize < totalBytes + storageReserveBytes)
           throw new UploadRequestError(507, 'UPLOAD_STORAGE_CAPACITY_REACHED')
-        const directory = await mkdtemp(join(storageDirectory, 'sitepilot-upload-'))
-        await chmod(directory, 0o700)
-        const tempPath = join(directory, 'source.xlsx')
-        const partialPath = join(directory, 'source.xlsx.part')
-        await writeFile(partialPath, bytes, { mode: 0o600, flag: 'wx' })
-        await rename(partialPath, tempPath)
-        const storageKey = relative(storageDirectory, tempPath)
-        const fileSha256 = createHash('sha256').update(bytes).digest('hex')
-        let queued: Awaited<ReturnType<SitePilotUploadJobs['enqueue']>>
-        try {
-          queued = await jobs.enqueue({
-            identity,
-            originalName,
-            tempPath: storageKey,
-            fileSha256,
-            fileSizeBytes: bytes.length,
-          })
-        } catch (error) {
-          await removeProtectedTemp(tempPath, storageDirectory)
-          throw error
+        const queuedJobs: Array<{
+          originalName: string
+          queued: Awaited<ReturnType<SitePilotUploadJobs['enqueue']>>
+        }> = []
+        for (const upload of uploads) {
+          const directory = await mkdtemp(join(storageDirectory, 'sitepilot-upload-'))
+          await chmod(directory, 0o700)
+          const tempPath = join(directory, `source${upload.extension}`)
+          const partialPath = `${tempPath}.part`
+          try {
+            await writeFile(partialPath, upload.bytes, { mode: 0o600, flag: 'wx' })
+            await rename(partialPath, tempPath)
+            const storageKey = relative(storageDirectory, tempPath)
+            const fileSha256 = createHash('sha256').update(upload.bytes).digest('hex')
+            const queued = await jobs.enqueue({
+              identity,
+              originalName: upload.originalName,
+              tempPath: storageKey,
+              fileSha256,
+              fileSizeBytes: upload.bytes.length,
+            })
+            if (queued.tempPathToDelete)
+              await removeProtectedTemp(queued.tempPathToDelete, storageDirectory)
+            queuedJobs.push({ originalName: upload.originalName, queued })
+          } catch (error) {
+            await removeProtectedTemp(tempPath, storageDirectory)
+            await rm(partialPath, { force: true }).catch(() => undefined)
+            throw error
+          }
         }
-        if (queued.tempPathToDelete)
-          await removeProtectedTemp(queued.tempPathToDelete, storageDirectory)
-        sendJson(response, queued.duplicate ? 200 : 202, {
-          jobId: queued.job.jobId,
-          status: queued.job.status,
-          duplicate: queued.duplicate,
-          progress: queued.job.progress,
-        })
+        if (queuedJobs.length === 1) {
+          const { queued } = queuedJobs[0]!
+          sendJson(response, queued.duplicate ? 200 : 202, {
+            jobId: queued.job.jobId,
+            status: queued.job.status,
+            duplicate: queued.duplicate,
+            progress: queued.job.progress,
+          })
+        } else {
+          sendJson(response, queuedJobs.every((item) => item.queued.duplicate) ? 200 : 202, {
+            jobs: queuedJobs.map(({ originalName, queued }) => ({
+              fileName: originalName,
+              jobId: queued.job.jobId,
+              status: queued.job.status,
+              duplicate: queued.duplicate,
+              progress: queued.job.progress,
+            })),
+          })
+        }
         return
       } finally {
         activeUploadRequests--
@@ -951,6 +1151,21 @@ export async function startUploadService(
               rowStart: hit.metadata.rowStart,
               rowEnd: hit.metadata.rowEnd,
               sourceRange: hit.metadata.sourceRange,
+              ...(Array.isArray(hit.metadata.headingPath)
+                ? { section: hit.metadata.headingPath.filter(Boolean).join(' > ') }
+                : {}),
+              ...(typeof hit.metadata.lineStart === 'number'
+                ? { lineStart: hit.metadata.lineStart }
+                : {}),
+              ...(typeof hit.metadata.lineEnd === 'number'
+                ? { lineEnd: hit.metadata.lineEnd }
+                : {}),
+              ...(typeof hit.metadata.paragraphStart === 'number'
+                ? { paragraphStart: hit.metadata.paragraphStart }
+                : {}),
+              ...(typeof hit.metadata.paragraphEnd === 'number'
+                ? { paragraphEnd: hit.metadata.paragraphEnd }
+                : {}),
             },
           })),
           explanation: result.explanation,

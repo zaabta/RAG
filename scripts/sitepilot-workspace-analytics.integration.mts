@@ -7,6 +7,7 @@ import 'dotenv/config'
 
 import {
   SitePilotWorkspace,
+  type WorkspaceCitation,
   type WorkspaceIdentity,
   type WorkspaceStreamEvent,
 } from '../src/sitepilot/agent/sitepilot-workspace.mjs'
@@ -26,9 +27,12 @@ const userId = `${tenantId}_user`
 const identity: WorkspaceIdentity = { tenantId, groupId, userId }
 const fileId = `fixture_${runId.replaceAll('-', '')}`
 const jobId = randomUUID()
+const pendingDocumentJobId = randomUUID()
 const importRunId = randomUUID()
 const conversationIds: string[] = []
 const historyQueries: string[] = []
+const retrievalInputs: string[] = []
+let retrievalCalls = 0
 const pool = new Pool({
   connectionString: databaseUrl,
   max: 2,
@@ -42,33 +46,61 @@ const fixtureRows = [
   { region: 'South', amount: 40, category: 'B' },
 ]
 
+let lastPrompt = ''
 const provider: LlmProvider = {
   name: 'mock',
   model: 'synthetic-mock',
-  async generate() {
-    return { text: 'Verified synthetic answer.', provider: this.name, model: this.model }
+  async generate(prompt) {
+    if (prompt.includes('Return only one JSON object with status'))
+      return { text: '{"status":"supported"}', provider: this.name, model: this.model }
+    return {
+      text: 'A synthetic fixture contains four records in two regions [1].',
+      provider: this.name,
+      model: this.model,
+    }
   },
-  async stream(_prompt, onText) {
-    onText('Verified ')
-    onText('synthetic answer.')
-    return { text: 'Verified synthetic answer.', provider: this.name, model: this.model }
+  async stream(prompt, onText) {
+    lastPrompt = prompt
+    const text = prompt.includes('Region: North; Amount: 10; Category: A')
+      ? 'The amount is 10 for North [1].'
+      : 'A synthetic fixture contains four records in two regions [1].'
+    onText(text.slice(0, 24))
+    onText(text.slice(24))
+    return { text, provider: this.name, model: this.model }
   },
 }
 
 const workspace = new SitePilotWorkspace(
   databaseUrl,
-  async () => [
-    {
-      content: 'A synthetic fixture contains four records in two regions.',
-      citation: {
-        source: 'synthetic-agent-fixture.xlsx',
-        sheet: 'Fixture',
-        rowStart: 2,
-        rowEnd: 5,
-        sourceRange: 'A2:C5',
+  async (question) => {
+    retrievalCalls++
+    retrievalInputs.push(question)
+    if (/amount|numeric value/iu.test(question))
+      return [
+        {
+          content: 'Region: North; Amount: 10; Category: A',
+          citation: {
+            source: 'synthetic-agent-fixture-authorized.xlsx',
+            sheet: 'Fixture',
+            rowStart: 2,
+            rowEnd: 2,
+            sourceRange: 'A2:C2',
+          },
+        },
+      ]
+    return [
+      {
+        content: 'A synthetic fixture contains four records in two regions.',
+        citation: {
+          source: 'synthetic-agent-fixture.xlsx',
+          sheet: 'Fixture',
+          rowStart: 2,
+          rowEnd: 5,
+          sourceRange: 'A2:C5',
+        },
       },
-    },
-  ],
+    ]
+  },
   join(tmpdir(), 'sitepilot-workspace-fixtures'),
   () => provider,
 )
@@ -87,6 +119,11 @@ async function insertFile(owner: WorkspaceIdentity, suffix: string, rows: typeof
     `INSERT INTO sitepilot_excel_test.excel_import_runs(run_id,file_id,content_hash,status,sheet_count,record_count,finished_at)
      VALUES($1,$2,$3,'complete',1,$4,NOW())`,
     [rId, fId, runId, rows.length],
+  )
+  await pool.query(
+    `INSERT INTO sitepilot_excel_test.excel_sheets(file_id,sheet_name,row_count,column_count,header_row,last_seen_run)
+     VALUES($1,'Fixture',$2,3,1,$3)`,
+    [fId, rows.length + 1, rId],
   )
   await pool.query(
     `INSERT INTO sitepilot_excel_test.sitepilot_upload_jobs(job_id,tenant_id,group_id,user_id,original_name,file_sha256,status)
@@ -140,6 +177,18 @@ try {
       { region: 'North', amount: 999, category: 'Private' },
     ]),
   )
+  await pool.query(
+    `INSERT INTO sitepilot_excel_test.sitepilot_upload_jobs
+     (job_id,tenant_id,group_id,user_id,original_name,file_sha256,status,file_size_bytes)
+     VALUES($1,$2,$3,$4,'synthetic-pending.csv',$5,'queued',23)`,
+    [
+      pendingDocumentJobId,
+      identity.tenantId,
+      identity.groupId,
+      identity.userId,
+      `${runId}_pending`,
+    ],
+  )
 
   const count = (await workspace.structuredQuery('How many records?', identity)) as {
     value: number
@@ -176,6 +225,197 @@ try {
     throw new Error('Numeric SUM did not include every authorized fixture row')
   if (filteredSum.value !== 30 || filteredSum.numericRows !== 2)
     throw new Error('Filtered numeric aggregation did not respect exact filter and tenant scope')
+
+  const listedDocuments = await workspace.listAuthorizedDocuments(identity)
+  if (
+    listedDocuments.length !== 2 ||
+    !listedDocuments.some(
+      (document) =>
+        document.fileName === 'synthetic-agent-fixture-authorized.xlsx' &&
+        document.fileType === 'XLSX' &&
+        document.mimeType === null &&
+        document.sheets.join(',') === 'Fixture',
+    ) ||
+    !listedDocuments.some(
+      (document) =>
+        document.fileName === 'synthetic-pending.csv' &&
+        document.fileType === 'CSV' &&
+        document.status === 'queued' &&
+        document.sizeBytes === 23 &&
+        document.sheets.length === 0,
+    )
+  )
+    throw new Error(
+      `Document discovery did not return authorized XLSX metadata and sheets: ${JSON.stringify(listedDocuments)}`,
+    )
+  if (listedDocuments.some((document) => document.fileName.includes('unauthorized')))
+    throw new Error('Document discovery exposed a file from another tenant')
+
+  const retrievalCountBeforeInventory = retrievalCalls
+  const agentToolsIdentity = { ...identity, userId: `${userId}_agent_tools` }
+  const inventoryConversation = await createConversation(agentToolsIdentity)
+  const inventoryEvents: WorkspaceStreamEvent[] = []
+  await workspace.streamMessage(
+    inventoryConversation,
+    'What kind of files we have?',
+    agentToolsIdentity,
+    new AbortController().signal,
+    (event) => inventoryEvents.push(event),
+  )
+  const inventoryComplete = inventoryEvents.find((event) => event.type === 'complete')
+  if (
+    !inventoryComplete ||
+    inventoryComplete.message.provider !== 'sitepilot-documents' ||
+    !inventoryComplete.message.content.includes('XLSX') ||
+    inventoryComplete.message.citations.some(
+      (citation: WorkspaceCitation) => citation.rowStart != null,
+    )
+  )
+    throw new Error('Inventory question did not return document metadata citations')
+  if (retrievalCalls !== retrievalCountBeforeInventory)
+    throw new Error('Inventory question unnecessarily invoked TypeGraph RAG')
+
+  const smallTalkConversation = await createConversation(agentToolsIdentity)
+  const smallTalkEvents: WorkspaceStreamEvent[] = []
+  await workspace.streamMessage(
+    smallTalkConversation,
+    'How are you?',
+    agentToolsIdentity,
+    new AbortController().signal,
+    (event) => smallTalkEvents.push(event),
+  )
+  const smallTalkComplete = smallTalkEvents.find((event) => event.type === 'complete')
+  if (
+    !smallTalkComplete ||
+    smallTalkComplete.message.citations.length !== 0 ||
+    smallTalkComplete.message.provider !== 'sitepilot-chat' ||
+    retrievalCalls !== retrievalCountBeforeInventory
+  )
+    throw new Error('Small talk invoked document retrieval or received irrelevant citations')
+
+  const metadataConversation = await createConversation(agentToolsIdentity)
+  const metadataEvents: WorkspaceStreamEvent[] = []
+  await workspace.streamMessage(
+    metadataConversation,
+    'List sheets and file size for synthetic-agent-fixture-authorized.xlsx',
+    agentToolsIdentity,
+    new AbortController().signal,
+    (event) => metadataEvents.push(event),
+  )
+  const metadataComplete = metadataEvents.find((event) => event.type === 'complete')
+  if (
+    !metadataComplete ||
+    !metadataComplete.message.content.includes('Sheets: Fixture') ||
+    metadataComplete.message.citations.length !== 1 ||
+    metadataComplete.message.citations[0]?.rowStart != null
+  )
+    throw new Error(
+      'Specific Excel metadata lookup returned missing data or spreadsheet row citations',
+    )
+  if (retrievalCalls !== retrievalCountBeforeInventory)
+    throw new Error('Metadata question unnecessarily invoked TypeGraph RAG')
+
+  const followUpConversation = await createConversation(agentToolsIdentity)
+  const firstFollowUpQuestion = 'Which numeric value is stored in the North record?'
+  const firstFollowUpEvents: WorkspaceStreamEvent[] = []
+  await workspace.streamMessage(
+    followUpConversation,
+    firstFollowUpQuestion,
+    agentToolsIdentity,
+    new AbortController().signal,
+    (event) => firstFollowUpEvents.push(event),
+  )
+  const secondFollowUpEvents: WorkspaceStreamEvent[] = []
+  await workspace.streamMessage(
+    followUpConversation,
+    'What value did you just tell me? Please cite the same source.',
+    agentToolsIdentity,
+    new AbortController().signal,
+    (event) => secondFollowUpEvents.push(event),
+  )
+  if (
+    !firstFollowUpEvents.some((event) => event.type === 'complete') ||
+    !secondFollowUpEvents.some((event) => event.type === 'complete') ||
+    !retrievalInputs.at(-1)?.includes(firstFollowUpQuestion)
+  )
+    throw new Error('Contextual follow-up did not reuse the preceding user question for retrieval')
+
+  const evidenceConversation = await createConversation(agentToolsIdentity)
+  const evidenceEvents: WorkspaceStreamEvent[] = []
+  await workspace.streamMessage(
+    evidenceConversation,
+    'What is the amount in the North row?',
+    agentToolsIdentity,
+    new AbortController().signal,
+    (event) => evidenceEvents.push(event),
+  )
+  const evidenceComplete = evidenceEvents.find((event) => event.type === 'complete')
+  if (
+    !evidenceComplete ||
+    !evidenceComplete.message.content.includes('10') ||
+    evidenceComplete.message.citations.length !== 1 ||
+    evidenceComplete.message.citations[0]?.sourceRange !== 'A2:C2' ||
+    !lastPrompt.includes('Region: North; Amount: 10; Category: A')
+  )
+    throw new Error(
+      'Excel content answer did not receive exact authorized row evidence and citation',
+    )
+
+  const unsupportedProvider: LlmProvider = {
+    name: 'mock-unsupported',
+    model: 'synthetic-unsupported',
+    async generate() {
+      return {
+        text: 'The account balance is 999 dollars [1].',
+        provider: this.name,
+        model: this.model,
+      }
+    },
+    async stream(_prompt, onText) {
+      const text = 'The account balance is 999 dollars [1].'
+      onText(text)
+      return { text, provider: this.name, model: this.model }
+    },
+  }
+  const unsupportedWorkspace = new SitePilotWorkspace(
+    databaseUrl,
+    async () => [
+      {
+        content: 'Account label: Operating account; recorded balance: 500 dollars.',
+        citation: {
+          source: 'synthetic-account-fixture.xlsx',
+          sheet: 'Accounts',
+          rowStart: 2,
+          rowEnd: 2,
+          sourceRange: 'A2:B2',
+        },
+      },
+    ],
+    join(tmpdir(), 'sitepilot-workspace-fixtures'),
+    () => unsupportedProvider,
+  )
+  const unsupportedConversation = await createConversation(agentToolsIdentity)
+  const unsupportedEvents: WorkspaceStreamEvent[] = []
+  await unsupportedWorkspace.streamMessage(
+    unsupportedConversation,
+    'What is the account balance?',
+    agentToolsIdentity,
+    new AbortController().signal,
+    (event) => unsupportedEvents.push(event),
+  )
+  await unsupportedWorkspace.close()
+  const unsupportedSaved = await pool.query(
+    `SELECT content,status,citations,tool_metadata->>'errorCode' AS code
+     FROM sitepilot_excel_test.agent_messages WHERE conversation_id=$1 AND role='assistant'`,
+    [unsupportedConversation],
+  )
+  if (
+    unsupportedSaved.rows[0]?.status !== 'failed' ||
+    unsupportedSaved.rows[0]?.code !== 'INSUFFICIENT_EVIDENCE' ||
+    (unsupportedSaved.rows[0]?.citations as unknown[]).length !== 0 ||
+    unsupportedEvents.some((event) => event.type === 'delta' && event.text.includes('999'))
+  )
+    throw new Error('Unsupported model claim was streamed or persisted with an irrelevant citation')
 
   const paginationConversations = await Promise.all([
     createConversation(identity),
@@ -318,10 +558,24 @@ try {
     'qwen3:8b',
     5_000,
     async (_input, init) => {
-      ollamaRequests.push(JSON.parse(String(init?.body)) as (typeof ollamaRequests)[number])
+      const request = JSON.parse(String(init?.body)) as (typeof ollamaRequests)[number]
+      ollamaRequests.push(request)
+      if (!request.stream)
+        return new Response(
+          JSON.stringify({
+            message: { role: 'assistant', content: '{"status":"supported"}' },
+            done: true,
+            prompt_eval_count: 100,
+            eval_count: 3,
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        )
       const chunks = [
-        { message: { content: 'Ollama synthetic ' }, done: false },
-        { message: { content: 'answer.', thinking: 'synthetic hidden reasoning' }, done: false },
+        { message: { content: 'A synthetic fixture contains ' }, done: false },
+        {
+          message: { content: 'four records [1].', thinking: 'synthetic hidden reasoning' },
+          done: false,
+        },
         { message: { content: '' }, done: true, prompt_eval_count: 18, eval_count: 4 },
       ]
       return new Response(chunks.map((item) => JSON.stringify(item)).join('\n') + '\n', {
@@ -368,7 +622,7 @@ try {
         event.type === 'complete',
     )
     if (
-      deltasText !== 'Ollama synthetic answer.' ||
+      deltasText !== 'A synthetic fixture contains four records.' ||
       complete?.message.status !== 'complete' ||
       complete.message.provider !== 'ollama' ||
       complete.message.model !== 'qwen3:8b' ||
@@ -378,13 +632,15 @@ try {
   }
   await ollamaWorkspace.close()
   if (
-    ollamaRequests.length !== 2 ||
-    ollamaRequests.some(
-      (request) => request.model !== 'qwen3:8b' || !request.stream || request.think !== false,
-    ) ||
+    ollamaRequests.length !== 4 ||
+    ollamaRequests.some((request) => request.model !== 'qwen3:8b' || request.think !== false) ||
+    JSON.stringify(ollamaRequests.map((request) => request.stream)) !==
+      JSON.stringify([true, false, true, false]) ||
     !ollamaRequests[0]?.messages.some((message) => message.role === 'system') ||
-    !ollamaRequests[1]?.messages.some(
-      (message) => message.role === 'assistant' && message.content === 'Ollama synthetic answer.',
+    !ollamaRequests[2]?.messages.some(
+      (message) =>
+        message.role === 'assistant' &&
+        message.content === 'A synthetic fixture contains four records.',
     )
   )
     throw new Error('Mocked Ollama chat payload omitted Qwen3 settings or conversation history')
@@ -406,6 +662,119 @@ try {
     throw new Error(
       'Mocked Ollama conversation did not persist provider, model, status, and citations',
     )
+
+  const syntheticAccountCitation = {
+    source: 'synthetic-accounts.xlsx',
+    sheet: 'Accounts',
+    rowStart: 2,
+    rowEnd: 2,
+    sourceRange: 'A2:C2',
+  }
+  const runVerifiedEvidenceCase = async (
+    question: string,
+    answer: string,
+    decision: 'supported' | 'insufficient' | 'conflicting',
+    retrieved: Array<{ content: string; citation: Record<string, unknown> }>,
+  ) => {
+    const testProvider: LlmProvider = {
+      name: 'synthetic-verifier',
+      model: 'fixture-verifier-v1',
+      async generate(prompt) {
+        return {
+          text: prompt.includes('Return only one JSON object with status')
+            ? JSON.stringify({ status: decision })
+            : answer,
+          provider: this.name,
+          model: this.model,
+        }
+      },
+      async stream(_prompt, onText) {
+        onText(answer)
+        return { text: answer, provider: this.name, model: this.model }
+      },
+    }
+    const testWorkspace = new SitePilotWorkspace(
+      databaseUrl,
+      async () => retrieved as never,
+      join(tmpdir(), 'sitepilot-workspace-fixtures'),
+      () => testProvider,
+    )
+    const conversation = await createConversation(identity)
+    const caseEvents: WorkspaceStreamEvent[] = []
+    await testWorkspace.streamMessage(
+      conversation,
+      question,
+      identity,
+      new AbortController().signal,
+      (event) => caseEvents.push(event),
+    )
+    await testWorkspace.close()
+    const saved = await pool.query(
+      `SELECT status,provider,model,citations,content,tool_metadata->>'errorCode' AS code
+       FROM sitepilot_excel_test.agent_messages WHERE conversation_id=$1 AND role='assistant'`,
+      [conversation],
+    )
+    return { events: caseEvents, saved: saved.rows[0] as Record<string, unknown> }
+  }
+  const genericAccount = await runVerifiedEvidenceCase(
+    'What is the actual bank for the USD account?',
+    'The actual bank is Synthetic Trust Bank [1].',
+    'supported',
+    [
+      {
+        content: 'Account title: بنك - دولار أمريكي; Account type: USD bank account; code: 1010.',
+        citation: syntheticAccountCitation,
+      },
+    ],
+  )
+  if (
+    genericAccount.saved.status !== 'failed' ||
+    genericAccount.saved.code !== 'INSUFFICIENT_EVIDENCE' ||
+    (genericAccount.saved.citations as unknown[]).length !== 0 ||
+    genericAccount.events.some((event) => event.type === 'delta')
+  )
+    throw new Error('Generic ledger evidence was accepted as proof of a named entity')
+
+  const supportedEntity = await runVerifiedEvidenceCase(
+    'Which bank is named for the USD account?',
+    'Synthetic Trust Bank is named for the USD account [1].',
+    'supported',
+    [
+      {
+        content: 'USD account; Bank name: Synthetic Trust Bank.',
+        citation: syntheticAccountCitation,
+      },
+    ],
+  )
+  if (
+    supportedEntity.saved.status !== 'complete' ||
+    !String(supportedEntity.saved.content).includes('Synthetic Trust Bank') ||
+    (supportedEntity.saved.citations as unknown[]).length !== 1
+  )
+    throw new Error('Directly stated synthetic entity was not verified and cited')
+
+  const conflictingFacts = await runVerifiedEvidenceCase(
+    'Which institution is identified?',
+    'The first source identifies Synthetic Trust Bank [1]. The second identifies Example Credit Union [2].',
+    'conflicting',
+    [
+      {
+        content: 'The account is held at Synthetic Trust Bank.',
+        citation: syntheticAccountCitation,
+      },
+      {
+        content: 'The account is held at Example Credit Union.',
+        citation: { ...syntheticAccountCitation, sourceRange: 'A3:C3', rowStart: 3, rowEnd: 3 },
+      },
+    ],
+  )
+  if (
+    conflictingFacts.saved.status !== 'failed' ||
+    conflictingFacts.saved.code !== 'CONFLICTING_EVIDENCE' ||
+    (conflictingFacts.saved.citations as unknown[]).length !== 0 ||
+    conflictingFacts.events.some((event) => event.type === 'delta')
+  )
+    throw new Error('Conflicting evidence was presented as a resolved claim')
 
   const unavailableModelWorkspace = new SitePilotWorkspace(
     databaseUrl,
@@ -543,6 +912,13 @@ try {
   console.log(
     JSON.stringify({
       passed: [
+        'small-talk routing answers How are you without RAG or citations',
+        'contextual follow-up retrieval uses the prior user question',
+        'unsupported generated claim is blocked before SSE and persisted as insufficient evidence',
+        'permission-scoped document inventory and file type listing',
+        'Excel metadata and sheet lookup without row citations or RAG',
+        'inventory routing skips RAG and uses document references',
+        'exact authorized spreadsheet row evidence and source range citation',
         'full-scope COUNT',
         'GROUP BY',
         'exact filtering',
@@ -555,6 +931,9 @@ try {
         'mocked Ollama /api/chat streaming with Qwen3 reasoning suppression',
         'mocked Ollama system prompt and persisted conversation history',
         'Ollama provider/model/status/citation persistence',
+        'generic ledger labels do not ground unsupported named entities',
+        'explicitly stated entities pass general evidence verification',
+        'conflicting source claims abstain without emitting an answer',
         'missing Ollama model reported as MODEL_NOT_INSTALLED',
         'stream cancellation persistence',
         'provider failure metadata persistence',
@@ -588,6 +967,10 @@ try {
       [fileIds],
     )
     await pool.query(
+      'DELETE FROM sitepilot_excel_test.excel_sheets WHERE file_id=ANY($1::text[])',
+      [fileIds],
+    )
+    await pool.query(
       'DELETE FROM sitepilot_excel_test.excel_import_runs WHERE run_id=ANY($1::uuid[])',
       [runIds],
     )
@@ -595,6 +978,9 @@ try {
       fileIds,
     ])
   }
+  await pool.query('DELETE FROM sitepilot_excel_test.sitepilot_upload_jobs WHERE job_id=$1', [
+    pendingDocumentJobId,
+  ])
   if (historyQueries.length)
     await pool.query(
       'DELETE FROM sitepilot_excel_test.document_search_history WHERE user_id=$1 AND query=ANY($2::text[])',

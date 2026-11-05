@@ -52,7 +52,7 @@ export function configuredLlmProvider(env: NodeJS.ProcessEnv = process.env): Llm
     return new OllamaProvider(
       baseUrl,
       env.SITEPILOT_LLM_MODEL || 'qwen3:8b',
-      Number(env.SITEPILOT_LLM_TIMEOUT_MS || 15_000),
+      Number(env.SITEPILOT_LLM_TIMEOUT_MS || 120_000),
     )
   }
   if (

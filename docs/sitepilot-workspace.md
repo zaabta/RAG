@@ -11,7 +11,7 @@ processing. Set the following in the backend-only `.env.docker` file:
 SITEPILOT_LLM_PROVIDER=ollama
 SITEPILOT_LLM_MODEL=qwen3:8b
 SITEPILOT_OLLAMA_BASE_URL=http://host.docker.internal:11434
-SITEPILOT_LLM_TIMEOUT_MS=60000
+SITEPILOT_LLM_TIMEOUT_MS=120000
 SITEPILOT_EXTERNAL_LLM_DATA_ALLOWED=false
 ```
 
@@ -29,8 +29,12 @@ is missing, the Agent returns the `MODEL_NOT_INSTALLED` SSE error and persists
 that safe error code with the failed assistant message.
 
 Ollama uses its native `/api/chat` endpoint with system, prior conversation,
-and current evidence messages. `SITEPILOT_LLM_TIMEOUT_MS` bounds both complete
-and streaming requests.
+and current evidence messages. Factual responses include evidence references;
+SitePilot checks the references and numeric values locally, then asks the same
+provider for a bounded supported/insufficient/conflicting verdict before
+emitting SSE text or persisting the answer. This is at most two model calls per
+factual response; direct greetings, metadata, and structured SQL answers do
+not use that verifier call. `SITEPILOT_LLM_TIMEOUT_MS` bounds provider calls.
 
 ## Gemini agent (external opt-in)
 
@@ -47,14 +51,49 @@ Keep `GEMINI_API_KEY` in the backend-only `.env.docker`, never in the frontend o
 
 Without either a configured local Ollama provider or explicitly authorized Gemini settings, the API records an assistant failure and returns a clear unavailable response; document search continues to work. Provider calls include no logs of prompt text, document contents, or API keys. Agent responses stream incrementally through the authenticated SSE endpoint.
 
+The Agent uses a bounded structured tool plan: conversational replies, document
+inventory, document metadata, structured spreadsheet analytics, or authorized
+TypeGraph hybrid search. Knowledge answers are checked against the cited
+chunks; uncited claims, unsupported numbers, conflicting sources, or invalid
+verifier output fail closed as insufficient/conflicting evidence. It does not
+automatically attach the top search results. Retrieved text is untrusted data,
+and model reasoning fields are never returned or logged.
+
+## Document formats and batch uploads
+
+`POST /api/documents/upload` still accepts one `file` field with the existing
+single-job response. It also accepts up to four `file` or `files` parts in one
+request (maximum 25 MiB per file and 50 MiB total); a batch returns a `jobs`
+array with an independent job ID, status, duplicate flag, and progress for each
+file. Every file is validated and queued independently under the authenticated
+tenant and group.
+
+Supported formats are `.xlsx`, `.docx`, `.txt`, and `.md`. Legacy `.doc` is
+rejected as unsupported because no secure converter is configured. DOCX is
+parsed with Mammoth with external file access disabled, after bounded ZIP
+archive checks. Markdown is parsed into headings, paragraphs, lists, tables,
+and code blocks; TXT is decoded as strict UTF-8 with normalized line endings.
+Chunks retain the filename, heading path, paragraph/table location, content
+hash, and stable IDs for retry-safe TypeGraph upserts. The default chunk size
+is 384 tokens with 48 tokens of overlap, measured with the cached multilingual
+E5 tokenizer already used for embeddings. Configure
+`SITEPILOT_DOCUMENT_CHUNK_SIZE_TOKENS` (64–480) and
+`SITEPILOT_DOCUMENT_CHUNK_OVERLAP_TOKENS` (0–half the selected size). Legacy
+`*_CHARS` settings are accepted by converting their values to approximate token
+settings; chunk boundaries themselves always use the actual tokenizer. Markdown
+and TXT citations carry source line ranges; Word citations carry extracted
+paragraph ranges and heading sections. Tokenizer loading is local-only and does
+not download a model. Parsing and indexing remain in the existing PostgreSQL-backed worker.
+
 ## APIs
 
 - `POST/GET /api/agent/conversations`, `GET/PATCH/DELETE /api/agent/conversations/:id`, `POST /api/agent/conversations/:id/messages`
 - `GET/POST/DELETE /api/search/history`, `DELETE /api/search/history/:id`
 - `GET /api/documents`, `GET /api/documents/:id/download`
 - `GET /api/documents/search?q=...`; the UI uses `saveHistory=true` for an explicit submitted search.
+- `POST /api/documents/upload` accepts one file or a batch; each file gets its own job and existing `GET /api/jobs/:jobId` / `/events` tracking.
 
-All routes require the existing SitePilot JWT (`aud=sitepilot-upload`) and are scoped to authenticated tenant, group, and user. Conversations and history are user-private; document listing/download follow the tenant and access-group boundary, matching the existing search visibility model. Downloads stream from storage and return 410 when an old original is no longer present.
+All routes require the existing SitePilot JWT (`aud=sitepilot-upload`) and are scoped to authenticated tenant, group, and user. Conversations and history are user-private; document listing/download and every ingested format follow the tenant and access-group boundary, matching the existing search visibility model. Downloads stream from storage and return 410 when an old original is no longer present.
 
 ## Original files
 
